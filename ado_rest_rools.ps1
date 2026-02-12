@@ -37,6 +37,39 @@ if (-not (Get-Variable -Name Form -Scope Script -ErrorAction SilentlyContinue)) 
 $logPath = $PSScriptRoot
 $logDate = Get-date -Format yyyy-MM-dd
 $logName = "ADO_REST_Tools_Result_$($logDate).log"
+$logFile = "$logPath\$logName"
+
+##---------------------------------------------------------------------------------------------------
+#Check Log File Existence
+if (-not (Test-Path -Path $logfile)) {
+    New-Item -Path $logFile -ItemType File
+}
+
+###===================================================================================================
+##---------------------------------------------------------------------------------------------------
+#Policy Type
+#"Minimum number of reviewers" id : fa4e907d-c16b-4a4c-9dfa-4906e5d171dd
+#"Required reviewers" id : fd2167ab-b0be-447a-8ec8-39368250530e
+
+###===================================================================================================
+##Define Azure Devops Server
+##---------------------------------------------------------------------------------------------------
+#Define Azure Devops Server Information
+$ADOServerFQDN = ""
+$collection = "DevOpsCollection"
+$projectName = ""
+$repoName = ""
+#$refNameMain = "refs/heads/main"
+#$refNameDevelop = "refs/heads/develop"
+
+##---------------------------------------------------------------------------------------------------
+#Define Azure Devops Server Access Token
+$MyPat = ''
+$B64Pat = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes(":$MyPat"))
+$headers = @{
+    'Authorization' = 'Basic ' + $B64Pat
+    'Content-Type' = 'application/json'
+}
 $ComboBoxProject = New-Object System.Windows.Forms.ComboBox
 $ComboBoxProject.Location = New-Object System.Drawing.Point(130,18)
 $ComboBoxProject.Size = New-Object System.Drawing.Size(300,24)
