@@ -463,7 +463,21 @@ function queryProjectPolicy {
     $policiesResponse = Invoke-RestMethod -Method Get -Uri $policiesUrl -Headers $headers
 
     foreach ($policy in $policiesResponse.value) {
-        if ($null -eq $policy.settings.scope.repositoryId -And $null -eq $policy.settings.scope.refName) {
+        # settings.scope can be a single object or an array; project-level policies have no repo/ref scope
+        $scopes = @()
+        if ($null -ne $policy.settings -and $null -ne $policy.settings.scope) {
+            $scopes = @($policy.settings.scope)
+        }
+
+        $hasRepoScope = $false
+        foreach ($s in $scopes) {
+            if ($null -ne $s.repositoryId -or $null -ne $s.refName) {
+                $hasRepoScope = $true
+                break
+            }
+        }
+
+        if (-not $hasRepoScope) {
             $policyTemp = [pscustomobject]@{
                 policyType = $($policy.Type.displayName)
                 policyID = $($policy.id)
@@ -709,22 +723,41 @@ function queryReposPolicy {
 
     $reposUrl = "https://$ADOServerFQDN/$collection/$projectNameEnc/_apis/git/repositories?api-version=6.0"
     $reposResponse = Invoke-RestMethod -Method Get -Uri $reposUrl -Headers $headers
+    $repoMap = @{}
+    foreach ($repo in $reposResponse.value) {
+        $repoMap[$repo.id] = $repo.name
+    }
 
     $policiesUrl = "https://$ADOServerFQDN/$collection/$projectNameEnc/_apis/policy/configurations?api-version=6.0"
     $policiesResponse = Invoke-RestMethod -Method Get -Uri $policiesUrl -Headers $headers
 
     foreach ($policy in $policiesResponse.value) {
-        if ($null -eq $policy.settings.scope.repositoryId -And $null -eq $policy.settings.scope.refName) {
-            foreach ($repo in $reposResponse.value) {
-                if ($repo.id -eq $policy.settings.scope.repositoryId) {
-                     $policyRepo = $repo.name
-                }
-                if ($policy.settings.scope.refName -eq "refs/heads/main") {
-                    $policyBranch = "Main"
-                } elseif ($policy.settings.scope.refName -eq "refs/heads/develop") {
-                    $policyBranch = "Develop"
-                }
+        # settings.scope can be a single object or an array; repo-level policies include repositoryId and refName
+        $scopes = @()
+        if ($null -ne $policy.settings -and $null -ne $policy.settings.scope) {
+            $scopes = @($policy.settings.scope)
+        }
+
+        $matchedScope = $null
+        foreach ($s in $scopes) {
+            if ($null -ne $s.repositoryId -and $null -ne $s.refName) {
+                $matchedScope = $s
+                break
             }
+        }
+
+        if ($null -ne $matchedScope) {
+            $policyRepo = $repoMap[$matchedScope.repositoryId]
+            if ([string]::IsNullOrWhiteSpace($policyRepo)) { $policyRepo = $matchedScope.repositoryId }
+
+            if ($matchedScope.refName -eq "refs/heads/main") {
+                $policyBranch = "Main"
+            } elseif ($matchedScope.refName -eq "refs/heads/develop") {
+                $policyBranch = "Develop"
+            } else {
+                $policyBranch = $matchedScope.refName
+            }
+
             $policyTemp = [pscustomobject]@{
                 policyRepo = $($policyRepo)
                 policyBranch = $($policyBranch)
