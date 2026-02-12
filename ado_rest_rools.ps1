@@ -8,6 +8,28 @@ Add-Type -AssemblyName System.Drawing
 #Add Visual Basic Form Type
 [void][Reflection.Assembly]::LoadWithPartialName('Microsoft.VisualBasic')
 
+# If a previous run left a Form object in the session, close and remove it to avoid duplicate UI
+try {
+    if (Get-Variable -Name Form -Scope Script -ErrorAction SilentlyContinue) {
+        if ($null -ne $Form) {
+            try {
+                if ($Form -is [System.Array]) { foreach ($f in $Form) { try { $f.Close(); $f.Dispose() } catch { } } }
+                else { try { $Form.Close(); $Form.Dispose() } catch { } }
+            } catch { }
+        }
+        Remove-Variable -Name Form -Scope Script -ErrorAction SilentlyContinue
+    }
+} catch { }
+
+# Create the main Form if it doesn't exist
+if (-not (Get-Variable -Name Form -Scope Script -ErrorAction SilentlyContinue)) {
+    $Form = New-Object System.Windows.Forms.Form
+    $Form.Text = 'Azure DevOps Server REST API Tool'
+    $Form.StartPosition = 'CenterScreen'
+    $Form.ClientSize = New-Object System.Drawing.Size(1280,900)
+    $Form.Font = New-Object System.Drawing.Font('Segoe UI',9)
+}
+
 ###===================================================================================================
 ##Define Log Output
 ##---------------------------------------------------------------------------------------------------
@@ -15,83 +37,30 @@ Add-Type -AssemblyName System.Drawing
 $logPath = $PSScriptRoot
 $logDate = Get-date -Format yyyy-MM-dd
 $logName = "ADO_REST_Tools_Result_$($logDate).log"
-$logFile = "$logPath\$logName"
-
-##---------------------------------------------------------------------------------------------------
-#Check Log File Existence
-if (-not (Test-Path -Path $logfile)) {
-    New-Item -Path $logFile -ItemType File
-}
-
-###===================================================================================================
-##---------------------------------------------------------------------------------------------------
-#Policy Type
-#"Minimum number of reviewers" id : fa4e907d-c16b-4a4c-9dfa-4906e5d171dd
-#"Required reviewers" id : fd2167ab-b0be-447a-8ec8-39368250530e
-
-###===================================================================================================
-##Define Azure Devops Server
-##---------------------------------------------------------------------------------------------------
-#Define Azure Devops Server Information
-$ADOServerFQDN = ""
-$collection = "DevOpsCollection"
-$projectName = ""
-$repoName = "" 
-#$refNameMain = "refs/heads/main"
-#$refNameDevelop = "refs/heads/develop"
-
-##---------------------------------------------------------------------------------------------------
-#Define Azure Devops Server Access Token
-$MyPat = ''
-$B64Pat = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes(":$MyPat"))
-$headers = @{
-    'Authorization' = 'Basic ' + $B64Pat
-    'Content-Type' = 'application/json'
-}
-
-###===================================================================================================
-##Define Azure DevOps Server Response (Repos Base)
-##---------------------------------------------------------------------------------------------------
-#Define Repos URL and Response
-#$reposUrl = "https://$ADOServerFQDN/$collection/$projectName/_apis/git/repositories?api-version=6.0"
-#$reposResponse = Invoke-RestMethod -Method Get -Uri $reposUrl -Headers $headers
-
-###===================================================================================================
-##Define Windows Form
-##---------------------------------------------------------------------------------------------------
-#Define Main Windows Form
-$Form = New-Object System.Windows.Forms.Form
-$Form.Text = "Azure DevOps Server REST API Tool"
-$Form.StartPosition = "CenterScreen"
-$Form.BackColor = "DarkGray"
-$Form.Size = New-Object System.Drawing.Size(1000,570)
-
-###===================================================================================================
-##Define Project Dropdown
-##---------------------------------------------------------------------------------------------------
-#Define Project ComboBox (will be populated from Azure DevOps)
 $ComboBoxProject = New-Object System.Windows.Forms.ComboBox
-# Position the project list over the "Query Default Branch" button (covers it visually)
-$ComboBoxProject.Location = New-Object System.Drawing.Point(140,20)
-$ComboBoxProject.Size = New-Object System.Drawing.Size(260,40)
+$ComboBoxProject.Location = New-Object System.Drawing.Point(130,18)
+$ComboBoxProject.Size = New-Object System.Drawing.Size(300,24)
 $ComboBoxProject.DropDownStyle = 'DropDownList'
 $ComboBoxProject.Enabled = $false
 
-$Form.Controls.Add($ComboBoxProject)
+$ComboBoxProject.BringToFront()
 
 ###===================================================================================================
 ##Define Output Text Box
 ##---------------------------------------------------------------------------------------------------
 #Define Result Output Text Box
 $TextBoxResult = New-Object System.Windows.Forms.TextBox
-$TextBoxResult.Location = New-Object System.Drawing.Size(20,200)
-$TextBoxResult.Size = New-Object System.Drawing.Size(940,310)
+$TextBoxResult.Location = New-Object System.Drawing.Point(20,200)
+$TextBoxResult.Size = New-Object System.Drawing.Size(960,440)
 $TextBoxResult.ForeColor = "White"
 $TextBoxResult.BackColor = "Black"
 $TextBoxResult.ScrollBars = "Vertical"
 $TextBoxResult.MultiLine = $True
 
-$Form.Controls.Add($TextBoxResult)
+# Make result box resize with the form
+$TextBoxResult.Anchor = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Bottom -bor [System.Windows.Forms.AnchorStyles]::Left -bor [System.Windows.Forms.AnchorStyles]::Right
+
+$null = $null # Defer adding the result TextBox until after layout so it's only added once
 
 ###===================================================================================================
 ##Define Form Label
@@ -102,55 +71,49 @@ $LabelTextBoxProject.Location = New-Object System.Drawing.Point(20,20)
 $LabelTextBoxProject.Size = New-Object System.Drawing.Size(100,20)
 $LabelTextBoxProject.Text = 'Project name:'
 
-$Form.Controls.Add($LabelTextBoxProject)
-
+# (moved into `$TopTable`) $LabelTextBoxProject will be added to the top layout panel later
 #Define Project Input Text Box Label
 $LabelSelfApproval = New-Object System.Windows.Forms.Label
 $LabelSelfApproval.Location = New-Object System.Drawing.Point(500,30)
 $LabelSelfApproval.Size = New-Object System.Drawing.Size(100,40)
 $LabelSelfApproval.Text = 'Enable/Disable Self Approval:'
 
-$Form.Controls.Add($LabelSelfApproval)
-
+# (moved into `$TopTable`) $LabelSelfApproval will be added to the top layout panel later
 #Define Using Project Label
 $LabelUsingProject = New-Object System.Windows.Forms.Label
 $LabelUsingProject.Location = New-Object System.Drawing.Point(20,80)
 $LabelUsingProject.Size = New-Object System.Drawing.Size(100,20)
 $LabelUsingProject.Text = 'Using Project:'
 
-$Form.Controls.Add($LabelUsingProject)
-
+# (moved into `$TopTable`) $LabelUsingProject will be added to the top layout panel later
 #Define Display Project Label
 $LabelDisplayProject = New-Object System.Windows.Forms.Label
 $LabelDisplayProject.Location = New-Object System.Drawing.Point(20,100)
 $LabelDisplayProject.Size = New-Object System.Drawing.Size(100,20)
 $LabelDisplayProject.Text = ''
 
-$Form.Controls.Add($LabelDisplayProject)
-
+# (moved into `$TopTable`) $LabelDisplayProject will be added to the top layout panel later
 ###===================================================================================================
 ##Define Form Dropdown Menu
 ##---------------------------------------------------------------------------------------------------
 #Define Branch Dropdown menu label
 $LabelObjBoxBranch = New-Object System.Windows.Forms.Label
-$LabelObjBoxBranch.Location = New-Object System.Drawing.Point(260,20)
+$LabelObjBoxBranch.Location = New-Object System.Drawing.Point(20,100)
 $LabelObjBoxBranch.Size = New-Object System.Drawing.Size(100,20)
 $LabelObjBoxBranch.Text = 'Set default branch:'
 
-$Form.Controls.Add($LabelObjBoxBranch)
-
+# (moved into `$TopTable`) $LabelObjBoxBranch will be added to the top layout panel later
 #Define Branch Dropdown menu
 $ObjBoxBranch = New-Object System.Windows.Forms.ComboBox
-$ObjBoxBranch.Location = New-Object System.Drawing.Size(260,40)
-$ObjBoxBranch.Size = New-Object System.Drawing.Size(100,40)
+$ObjBoxBranch.Location = New-Object System.Drawing.Point(130,100)
+$ObjBoxBranch.Size = New-Object System.Drawing.Size(120,24)
 $ObjBoxBranch.Enabled = $false
 
 #Define Branch Dropdoen menu value
 $ObjBoxBranch.Items.Add('Develop') | Out-Null
 $ObjBoxBranch.Items.Add('Main') | Out-Null
 
-$Form.Controls.Add($ObjBoxBranch)
-
+# (moved into `$TopTable`) $ObjBoxBranch will be added to the top layout panel later
 ##---------------------------------------------------------------------------------------------------
 # Load projects from Azure DevOps and populate project dropdown
 function loadProjects {
@@ -180,11 +143,10 @@ $LabelObjBoxPolicyType.Size = New-Object System.Drawing.Size(70,20)
 $LabelObjBoxPolicyType.Text = 'Policy Type:'
 $LabelObjBoxPolicyType.Enabled = $false
 
-$Form.Controls.Add($LabelObjBoxPolicyType)
-
+# (moved into `$TopTable`) $LabelObjBoxPolicyType will be added to the top layout panel later
 #Define Policy Type Dropdown menu
 $ObjBoxPolicyType = New-Object System.Windows.Forms.ComboBox
-$ObjBoxPolicyType.Location = New-Object System.Drawing.Size(690,95)
+$ObjBoxPolicyType.Location = New-Object System.Drawing.Point(690,95)
 $ObjBoxPolicyType.Size = New-Object System.Drawing.Size(160,40)
 $ObjBoxPolicyType.Enabled = $false
 
@@ -192,26 +154,24 @@ $ObjBoxPolicyType.Enabled = $false
 $ObjBoxPolicyType.Items.Add('Minimum number of reviewers') | Out-Null
 $ObjBoxPolicyType.Items.Add('Main') | Out-Null
 
-$Form.Controls.Add($ObjBoxPolicyType)
-
+# (moved into `$TopTable`) $ObjBoxPolicyType will be added to the top layout panel later
 ###===================================================================================================
 ##Define Form Button
 ##---------------------------------------------------------------------------------------------------
 #Define Button of query all repos
 $ButtonQueryRepos = New-Object System.Windows.Forms.Button
-$ButtonQueryRepos.Location = New-Object System.Drawing.Size(140,20)
-$ButtonQueryRepos.Size = New-Object System.Drawing.Size(100,40)
+$ButtonQueryRepos.Location = New-Object System.Drawing.Point(20,160)
+$ButtonQueryRepos.Size = New-Object System.Drawing.Size(200,40)
 $ButtonQueryRepos.Text = "Query Default Branch"
 $ButtonQueryRepos.Enabled = $false
 $ButtonQueryRepos.Add_Click( { queryAllRepo } )
 
-$Form.Controls.Add($ButtonQueryRepos)
-
+# (moved into `$MiddlePanel`) $ButtonQueryRepos will be added to the middle layout panel later
 ##---------------------------------------------------------------------------------------------------
 #Define Button to refresh projects list
 $ButtonRefreshProjects = New-Object System.Windows.Forms.Button
-$ButtonRefreshProjects.Location = New-Object System.Drawing.Size(420,20)
-$ButtonRefreshProjects.Size = New-Object System.Drawing.Size(120,40)
+$ButtonRefreshProjects.Location = New-Object System.Drawing.Point(340,20)
+$ButtonRefreshProjects.Size = New-Object System.Drawing.Size(120,30)
 $ButtonRefreshProjects.Text = "Refresh Projects"
 $ButtonRefreshProjects.Enabled = $true
 $ButtonRefreshProjects.Add_Click( {
@@ -220,150 +180,137 @@ $ButtonRefreshProjects.Add_Click( {
     $ButtonRefreshProjects.Enabled = $true
 })
 
-$Form.Controls.Add($ButtonRefreshProjects)
-
+# (moved into `$TopTable`) $ButtonRefreshProjects will be added to the top layout panel later
+$ButtonRefreshProjects.BringToFront()
 ##---------------------------------------------------------------------------------------------------
 #Define Button of update repos default branch
 $ButtonSetDefaultBranch = New-Object System.Windows.Forms.Button
-$ButtonSetDefaultBranch.Location = New-Object System.Drawing.Size(380,20)
-$ButtonSetDefaultBranch.Size = New-Object System.Drawing.Size(100,40)
+$ButtonSetDefaultBranch.Location = New-Object System.Drawing.Point(240,160)
+$ButtonSetDefaultBranch.Size = New-Object System.Drawing.Size(200,40)
 $ButtonSetDefaultBranch.Text = "Set Default Branch"
 $ButtonSetDefaultBranch.Enabled = $false
 $ButtonSetDefaultBranch.Add_Click( { setDefaultBranch } )
 
-$Form.Controls.Add($ButtonSetDefaultBranch)
-
+# (moved into `$MiddlePanel`) $ButtonSetDefaultBranch will be added to the middle layout panel later
 ##---------------------------------------------------------------------------------------------------
 #Define Button of query project policy
 $ButtonQueryProjectPolicy = New-Object System.Windows.Forms.Button
-$ButtonQueryProjectPolicy.Location = New-Object System.Drawing.Size(140,80)
+$ButtonQueryProjectPolicy.Location = New-Object System.Drawing.Point(140,80)
 $ButtonQueryProjectPolicy.Size = New-Object System.Drawing.Size(100,40)
 $ButtonQueryProjectPolicy.Text = "Query Project Policy"
 $ButtonQueryProjectPolicy.Enabled = $false
 $ButtonQueryProjectPolicy.Add_Click( { queryProjectPolicy } )
 
-$Form.Controls.Add($ButtonQueryProjectPolicy)
-
+# (moved into `$MiddlePanel`) $ButtonQueryProjectPolicy will be added to the middle layout panel later
 ##---------------------------------------------------------------------------------------------------
 #Define Button of disable project policy
 $ButtonDisableProjectPolicy = New-Object System.Windows.Forms.Button
-$ButtonDisableProjectPolicy.Location = New-Object System.Drawing.Size(260,80)
+$ButtonDisableProjectPolicy.Location = New-Object System.Drawing.Point(260,80)
 $ButtonDisableProjectPolicy.Size = New-Object System.Drawing.Size(100,40)
 $ButtonDisableProjectPolicy.Text = "Disable Project Policy"
 $ButtonDisableProjectPolicy.Enabled = $false
 $ButtonDisableProjectPolicy.Add_Click( { disableProjectPolicy } )
 
-$Form.Controls.Add($ButtonDisableProjectPolicy)
-
+# (moved into `$MiddlePanel`) $ButtonDisableProjectPolicy will be added to the middle layout panel later
 ##---------------------------------------------------------------------------------------------------
 #Define Button of enable project policy
 $ButtonEnableProjectPolicy = New-Object System.Windows.Forms.Button
-$ButtonEnableProjectPolicy.Location = New-Object System.Drawing.Size(380,80)
+$ButtonEnableProjectPolicy.Location = New-Object System.Drawing.Point(380,80)
 $ButtonEnableProjectPolicy.Size = New-Object System.Drawing.Size(100,40)
 $ButtonEnableProjectPolicy.Text = "Enable Project Policy"
 $ButtonEnableProjectPolicy.Enabled = $false
 $ButtonEnableProjectPolicy.Add_Click( { enableProjectPolicy } )
 
-$Form.Controls.Add($ButtonEnableProjectPolicy)
-
+# (moved into `$MiddlePanel`) $ButtonEnableProjectPolicy will be added to the middle layout panel later
 ##---------------------------------------------------------------------------------------------------
 #Define Button of delete project policy
 $ButtonDeleteProjectPolicy = New-Object System.Windows.Forms.Button
-$ButtonDeleteProjectPolicy.Location = New-Object System.Drawing.Size(500,80)
+$ButtonDeleteProjectPolicy.Location = New-Object System.Drawing.Point(500,80)
 $ButtonDeleteProjectPolicy.Size = New-Object System.Drawing.Size(100,40)
 $ButtonDeleteProjectPolicy.Text = "Delete Project Policy"
 $ButtonDeleteProjectPolicy.Enabled = $false
 $ButtonDeleteProjectPolicy.Add_Click( { deleteProjectPolicy } )
 
-$Form.Controls.Add($ButtonDeleteProjectPolicy)
-
+# (moved into `$MiddlePanel`) $ButtonDeleteProjectPolicy will be added to the middle layout panel later
 ##---------------------------------------------------------------------------------------------------
 #Define Button of query repositories policy
 $ButtonQueryReposPolicy = New-Object System.Windows.Forms.Button
-$ButtonQueryReposPolicy.Location = New-Object System.Drawing.Size(140,140)
+$ButtonQueryReposPolicy.Location = New-Object System.Drawing.Point(140,140)
 $ButtonQueryReposPolicy.Size = New-Object System.Drawing.Size(100,40)
 $ButtonQueryReposPolicy.Text = "Query Repos Policy"
 $ButtonQueryReposPolicy.Enabled = $false
 $ButtonQueryReposPolicy.Add_Click( { queryReposPolicy } )
 
-$Form.Controls.Add($ButtonQueryReposPolicy)
-
+# (moved into `$MiddlePanel`) $ButtonQueryReposPolicy will be added to the middle layout panel later
 ##---------------------------------------------------------------------------------------------------
 #Define Button of disable repositories policy
 $ButtonDisableReposPolicy = New-Object System.Windows.Forms.Button
-$ButtonDisableReposPolicy.Location = New-Object System.Drawing.Size(260,140)
+$ButtonDisableReposPolicy.Location = New-Object System.Drawing.Point(260,140)
 $ButtonDisableReposPolicy.Size = New-Object System.Drawing.Size(100,40)
 $ButtonDisableReposPolicy.Text = "Disable Repos Policy"
 $ButtonDisableReposPolicy.Enabled = $false
 $ButtonDisableReposPolicy.Add_Click( { disableReposPolicy } )
 
-$Form.Controls.Add($ButtonDisableReposPolicy)
-
+# (moved into `$MiddlePanel`) $ButtonDisableReposPolicy will be added to the middle layout panel later
 ##---------------------------------------------------------------------------------------------------
 #Define Button of enable repositories policy
 $ButtonEnableReposPolicy = New-Object System.Windows.Forms.Button
-$ButtonEnableReposPolicy.Location = New-Object System.Drawing.Size(380,140)
+$ButtonEnableReposPolicy.Location = New-Object System.Drawing.Point(380,140)
 $ButtonEnableReposPolicy.Size = New-Object System.Drawing.Size(100,40)
 $ButtonEnableReposPolicy.Text = "Enable Project Policy"
 $ButtonEnableReposPolicy.Enabled = $false
 $ButtonEnableReposPolicy.Add_Click( { enableReposPolicy } )
 
-$Form.Controls.Add($ButtonEnableReposPolicy)
-
+# (moved into `$MiddlePanel`) $ButtonEnableReposPolicy will be added to the middle layout panel later
 ##---------------------------------------------------------------------------------------------------
 #Define Button of delete repositories policy
 $ButtonDeleteReposPolicy = New-Object System.Windows.Forms.Button
-$ButtonDeleteReposPolicy.Location = New-Object System.Drawing.Size(500,140)
+$ButtonDeleteReposPolicy.Location = New-Object System.Drawing.Point(500,140)
 $ButtonDeleteReposPolicy.Size = New-Object System.Drawing.Size(100,40)
 $ButtonDeleteReposPolicy.Text = "Delete Repos Policy"
 $ButtonDeleteReposPolicy.Enabled = $false
 $ButtonDeleteReposPolicy.Add_Click( { deleteReposPolicy } )
 
-$Form.Controls.Add($ButtonDeleteReposPolicy)
-
+# (moved into `$MiddlePanel`) $ButtonDeleteReposPolicy will be added to the middle layout panel later
 ##---------------------------------------------------------------------------------------------------
 #Define Button of query repositories self approval
 $ButtonQuerySelfApproval = New-Object System.Windows.Forms.Button
-$ButtonQuerySelfApproval.Location = New-Object System.Drawing.Size(620,20)
+$ButtonQuerySelfApproval.Location = New-Object System.Drawing.Point(620,20)
 $ButtonQuerySelfApproval.Size = New-Object System.Drawing.Size(100,40)
 $ButtonQuerySelfApproval.Text = "Query Self Approval"
 $ButtonQuerySelfApproval.Enabled = $false
 $ButtonQuerySelfApproval.Add_Click( { querySelfApproval } )
 
-$Form.Controls.Add($ButtonQuerySelfApproval)
-
+# (moved into `$TopTable`) $ButtonQuerySelfApproval will be added to the top layout panel later
 ##---------------------------------------------------------------------------------------------------
 #Define Button of enable repositories self approval
 $ButtonEnableSelfApproval = New-Object System.Windows.Forms.Button
-$ButtonEnableSelfApproval.Location = New-Object System.Drawing.Size(740,20)
+$ButtonEnableSelfApproval.Location = New-Object System.Drawing.Point(740,20)
 $ButtonEnableSelfApproval.Size = New-Object System.Drawing.Size(100,40)
 $ButtonEnableSelfApproval.Text = "Enable Self Approval"
 $ButtonEnableSelfApproval.Enabled = $false
 $ButtonEnableSelfApproval.Add_Click( { enableSelfApproval } )
 
-$Form.Controls.Add($ButtonEnableSelfApproval)
-
+# (moved into `$TopTable`) $ButtonEnableSelfApproval will be added to the top layout panel later
 ##---------------------------------------------------------------------------------------------------
 #Define Button of disable repositories self approval
 $ButtonDisableSelfApproval = New-Object System.Windows.Forms.Button
-$ButtonDisableSelfApproval.Location = New-Object System.Drawing.Size(860,20)
+$ButtonDisableSelfApproval.Location = New-Object System.Drawing.Point(860,20)
 $ButtonDisableSelfApproval.Size = New-Object System.Drawing.Size(100,40)
 $ButtonDisableSelfApproval.Text = "Disable Self Approval"
 $ButtonDisableSelfApproval.Enabled = $false
 $ButtonDisableSelfApproval.Add_Click( { disableSelfApproval } )
 
-$Form.Controls.Add($ButtonDisableSelfApproval)
-
+# (moved into `$TopTable`) $ButtonDisableSelfApproval will be added to the top layout panel later
 ##---------------------------------------------------------------------------------------------------
 #Define Button of exit form
 $ButtonExit = New-Object System.Windows.Forms.Button
-$ButtonExit.Location = New-Object System.Drawing.Size(860,140)
+$ButtonExit.Location = New-Object System.Drawing.Point(860,140)
 $ButtonExit.Size = New-Object System.Drawing.Size(100,40)
 $ButtonExit.Text = "Exit"
 $ButtonExit.Add_Click({$Form.Close()})
 
-$Form.Controls.Add($ButtonExit)
-
+# (moved into `$MiddlePanel`) $ButtonExit will be added to the middle layout panel later
 ##Common Function
 ##---------------------------------------------------------------------------------------------------
 #Define function to write log
@@ -1345,7 +1292,236 @@ $ObjBoxBranch.Add_SelectedIndexChanged({
 ###===================================================================================================
 ##Loading Windows Form Object
 ##---------------------------------------------------------------------------------------------------
-#Loading Windows Form
-# Attempt to load projects into the dropdown before showing the form
+# Loading Windows Form
+# Apply explicit top-area layout overrides to prevent overlaps
+# These overrides ensure the project controls and labels occupy the reserved
+# area at the top of the form so the later reflow doesn't place controls
+# on top of them.
+$LabelTextBoxProject.Location = New-Object System.Drawing.Point(20,20)
+$LabelTextBoxProject.Size = New-Object System.Drawing.Size(100,20)
+
+if ($null -ne $ComboBoxProject) {
+    $ComboBoxProject.Location = New-Object System.Drawing.Point(130,20)
+    $ComboBoxProject.Size = New-Object System.Drawing.Size(300,24)
+}
+
+if ($null -ne $ButtonRefreshProjects) {
+    $ButtonRefreshProjects.Location = New-Object System.Drawing.Point(340,20)
+    $ButtonRefreshProjects.Size = New-Object System.Drawing.Size(120,30)
+    $ButtonRefreshProjects.BringToFront()
+}
+
+$LabelUsingProject.Location = New-Object System.Drawing.Point(20,60)
+$LabelUsingProject.Size = New-Object System.Drawing.Size(100,20)
+
+$LabelDisplayProject.Location = New-Object System.Drawing.Point(130,60)
+$LabelDisplayProject.Size = New-Object System.Drawing.Size(200,20)
+
+$LabelObjBoxBranch.Location = New-Object System.Drawing.Point(20,100)
+$LabelObjBoxBranch.Size = New-Object System.Drawing.Size(100,20)
+
+if ($null -ne $ObjBoxBranch) {
+    $ObjBoxBranch.Location = New-Object System.Drawing.Point(130,100)
+    $ObjBoxBranch.Size = New-Object System.Drawing.Size(200,20)
+}
+
+if ($null -ne $ButtonQueryRepos) {
+    $ButtonQueryRepos.Location = New-Object System.Drawing.Point(20,140)
+    $ButtonQueryRepos.Size = New-Object System.Drawing.Size(200,40)
+}
+
+if ($null -ne $ButtonSetDefaultBranch) {
+    $ButtonSetDefaultBranch.Location = New-Object System.Drawing.Point(240,140)
+    $ButtonSetDefaultBranch.Size = New-Object System.Drawing.Size(200,40)
+}
+
+# Revert form size to a reasonable default so controls fit predictably
+if ($null -ne $Form) {
+    $Form.Font = New-Object System.Drawing.Font("Segoe UI",9)
+    $Form.AutoScaleMode = [System.Windows.Forms.AutoScaleMode]::Font
+    $Form.ClientSize = New-Object System.Drawing.Size(1280,900)
+
+    # Create a TableLayoutPanel for the top controls for predictable column alignment
+    $TopTable = New-Object System.Windows.Forms.TableLayoutPanel
+    $TopTable.ColumnCount = 8
+    $TopTable.RowCount = 2
+    # Define column widths (percent)
+    # Configure column styles: reserve an absolute wide column for the Project combo so its MinimumSize is respected
+    $TopTable.ColumnStyles.Clear()
+    $TopTable.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, 5)))
+    $TopTable.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Absolute, 360)))
+    $TopTable.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Absolute, 130)))
+    $TopTable.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, 10)))
+    $TopTable.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Absolute, 220)))
+    # Reserve three absolute columns for the self-approval buttons to avoid overlap
+    $TopTable.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Absolute, 180)))
+    $TopTable.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Absolute, 180)))
+    $TopTable.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Absolute, 180)))
+    $TopTable.RowStyles.Clear()
+    $TopTable.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Absolute, 48)))
+    $TopTable.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Absolute, 48)))
+    $TopTable.Location = New-Object System.Drawing.Point(10,10)
+    # Make table full width of the form (with small padding)
+    try { $tableWidth = $Form.ClientSize.Width - 40 } catch { $tableWidth = 1200 }
+    $TopTable.Size = New-Object System.Drawing.Size([Math]::Max(700,$tableWidth),120)
+    $TopTable.Dock = 'Top'
+    $TopTable.Padding = New-Object System.Windows.Forms.Padding(6)
+
+    # Remove controls from form before reparenting
+    $Form.Controls.Remove($LabelTextBoxProject) | Out-Null
+    $Form.Controls.Remove($ComboBoxProject) | Out-Null
+    $Form.Controls.Remove($ButtonRefreshProjects) | Out-Null
+    $Form.Controls.Remove($LabelUsingProject) | Out-Null
+    $Form.Controls.Remove($LabelDisplayProject) | Out-Null
+    $Form.Controls.Remove($LabelObjBoxBranch) | Out-Null
+    $Form.Controls.Remove($ObjBoxBranch) | Out-Null
+    $Form.Controls.Remove($LabelObjBoxPolicyType) | Out-Null
+    $Form.Controls.Remove($ObjBoxPolicyType) | Out-Null
+    $Form.Controls.Remove($LabelSelfApproval) | Out-Null
+    $Form.Controls.Remove($ButtonQuerySelfApproval) | Out-Null
+    $Form.Controls.Remove($ButtonEnableSelfApproval) | Out-Null
+    $Form.Controls.Remove($ButtonDisableSelfApproval) | Out-Null
+
+    # Add controls into table cells (col,row) — ensure each control is removed from any previous parent first
+    $tableAdds = @(
+        @{ctrl=$LabelTextBoxProject; col=0; row=0},
+        @{ctrl=$ComboBoxProject; col=1; row=0},
+        @{ctrl=$ButtonRefreshProjects; col=2; row=0},
+        @{ctrl=$LabelUsingProject; col=3; row=0},
+        @{ctrl=$LabelDisplayProject; col=4; row=0},
+        @{ctrl=$LabelObjBoxBranch; col=0; row=1},
+        @{ctrl=$ObjBoxBranch; col=1; row=1},
+        @{ctrl=$LabelObjBoxPolicyType; col=2; row=1},
+        @{ctrl=$ObjBoxPolicyType; col=3; row=1},
+        # Move LabelSelfApproval to the top row above the QuerySelfApproval button (col 5, row 0)
+        @{ctrl=$LabelSelfApproval; col=5; row=0},
+        @{ctrl=$ButtonQuerySelfApproval; col=5; row=1},
+        @{ctrl=$ButtonEnableSelfApproval; col=6; row=1},
+        @{ctrl=$ButtonDisableSelfApproval; col=7; row=1}
+    )
+    foreach ($entry in $tableAdds) {
+        $c = $entry.ctrl
+        if ($null -ne $c) {
+            try { if ($null -ne $c.Parent) { $c.Parent.Controls.Remove($c) } } catch { }
+            try { $TopTable.Controls.Add($c, $entry.col, $entry.row) | Out-Null } catch { }
+        }
+    }
+    # Ensure the ComboBox span is set after adding
+    try { $TopTable.SetColumnSpan($ComboBoxProject,1) } catch { }
+    # Adjust LabelSelfApproval to sit above the QuerySelfApproval button and center its text
+    try {
+        if ($null -ne $LabelSelfApproval) {
+            $LabelSelfApproval.AutoSize = $false
+            $LabelSelfApproval.Dock = 'Fill'
+            $LabelSelfApproval.TextAlign = [System.Drawing.ContentAlignment]::MiddleCenter
+            $LabelSelfApproval.MinimumSize = New-Object System.Drawing.Size(160,24)
+        }
+    } catch { }
+
+    # Set common margins and sizes for table children and ensure combos fill their cells
+    foreach ($ctrl in $TopTable.Controls) {
+        try { $ctrl.Margin = New-Object System.Windows.Forms.Padding(6) } catch { }
+        if ($ctrl -is [System.Windows.Forms.Button]) {
+            $ctrl.Size = New-Object System.Drawing.Size(160,36)
+            try { $ctrl.MinimumSize = New-Object System.Drawing.Size(140,36) } catch { }
+        }
+        if ($ctrl -is [System.Windows.Forms.ComboBox]) {
+            try { $ctrl.Dock = 'Fill' } catch { $ctrl.Size = New-Object System.Drawing.Size(300,24) }
+            try { $ctrl.DropDownStyle = 'DropDownList' } catch { }
+        }
+        if ($ctrl -is [System.Windows.Forms.Label]) {
+            $ctrl.AutoSize = $true
+            try { $ctrl.Anchor = [System.Windows.Forms.AnchorStyles]::Left } catch { }
+        }
+    }
+
+    # Ensure specific controls have adequate minimum widths for display
+    try { $ComboBoxProject.MinimumSize = New-Object System.Drawing.Size(300,24) } catch { }
+    try { $ObjBoxBranch.MinimumSize = New-Object System.Drawing.Size(220,24) } catch { }
+    try { $ObjBoxPolicyType.MinimumSize = New-Object System.Drawing.Size(200,24) } catch { }
+    try { $LabelDisplayProject.MinimumSize = New-Object System.Drawing.Size(200,20) } catch { }
+
+    # Ensure the self-approval buttons occupy their table cells and are visible
+    try { $ButtonQuerySelfApproval.Dock = 'Fill'; $ButtonQuerySelfApproval.MinimumSize = New-Object System.Drawing.Size(140,36); $ButtonQuerySelfApproval.Visible = $true } catch { }
+    try { $ButtonEnableSelfApproval.Dock = 'Fill'; $ButtonEnableSelfApproval.MinimumSize = New-Object System.Drawing.Size(140,36); $ButtonEnableSelfApproval.Visible = $true } catch { }
+    try { $ButtonDisableSelfApproval.Dock = 'Fill'; $ButtonDisableSelfApproval.MinimumSize = New-Object System.Drawing.Size(140,36); $ButtonDisableSelfApproval.Visible = $true } catch { }
+
+    # Adjust Policy Type label and combo so the label aligns vertically with the dropdown
+    try {
+        $LabelObjBoxPolicyType.AutoSize = $false
+        $LabelObjBoxPolicyType.Dock = 'Fill'
+        $LabelObjBoxPolicyType.TextAlign = [System.Drawing.ContentAlignment]::MiddleRight
+        $LabelObjBoxPolicyType.MinimumSize = New-Object System.Drawing.Size(100,24)
+    } catch { }
+    try {
+        $ObjBoxPolicyType.Dock = 'Fill'
+        $ObjBoxPolicyType.MinimumSize = New-Object System.Drawing.Size(200,24)
+    } catch { }
+
+    $Form.Controls.Add($TopTable)
+    $TopTable.BringToFront()
+
+    # Create a middle FlowLayoutPanel for the main action buttons (keeps them organized and wraps)
+    $MiddlePanel = New-Object System.Windows.Forms.FlowLayoutPanel
+    $middleY = $TopTable.Location.Y + $TopTable.Height + 6
+    $MiddlePanel.Location = New-Object System.Drawing.Point -ArgumentList 10, $middleY
+    try { $mpWidth = $Form.ClientSize.Width - 40 } catch { $mpWidth = 1200 }
+    $MiddlePanel.Size = New-Object System.Drawing.Size([Math]::Max(600,$mpWidth),140)
+    $MiddlePanel.FlowDirection = 'LeftToRight'
+    $MiddlePanel.WrapContents = $true
+    $MiddlePanel.AutoSize = $false
+    $MiddlePanel.Padding = New-Object System.Windows.Forms.Padding(6)
+    $MiddlePanel.Anchor = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Left -bor [System.Windows.Forms.AnchorStyles]::Right
+
+    # Remove lower controls from the form and add into middle panel
+    $lowerControls = @(
+        $ButtonQueryRepos, $ButtonQueryReposPolicy, $ButtonDisableReposPolicy, $ButtonEnableReposPolicy, $ButtonDeleteReposPolicy,
+        $ButtonQueryProjectPolicy, $ButtonDisableProjectPolicy, $ButtonEnableProjectPolicy, $ButtonDeleteProjectPolicy,
+        $ButtonSetDefaultBranch, $ButtonExit
+    )
+    foreach ($lc in $lowerControls) {
+        if ($null -ne $lc) {
+            try { $Form.Controls.Remove($lc) } catch { }
+            try { if ($null -ne $lc.Parent) { $lc.Parent.Controls.Remove($lc) } } catch { }
+            $lc.Size = New-Object System.Drawing.Size(160,40)
+            try { $lc.MinimumSize = New-Object System.Drawing.Size(140,40) } catch { }
+            $lc.Margin = New-Object System.Windows.Forms.Padding(8)
+            try { $MiddlePanel.Controls.Add($lc) | Out-Null } catch { }
+        }
+    }
+
+    $Form.Controls.Add($MiddlePanel)
+    $MiddlePanel.BringToFront()
+
+    # Ensure Exit button is visible and has a minimum size inside the middle panel
+    try { $ButtonExit.MinimumSize = New-Object System.Drawing.Size(140,40); $ButtonExit.Visible = $true } catch { }
+
+    # Add the results TextBox after panels so it's parented only once and anchors correctly
+    try { $Form.Controls.Remove($TextBoxResult) } catch { }
+    $TextBoxResult.Location = New-Object System.Drawing.Point(20,($TopTable.Height + $MiddlePanel.Height + 24))
+
+    # Safely determine the form client size (some hosts may leave $Form or ClientSize as an array)
+    $formClientSize = $null
+    if ($null -ne $Form) {
+        try {
+            $cs = $Form.ClientSize
+            if ($cs -is [System.Array]) { $formClientSize = $cs[0] } else { $formClientSize = $cs }
+        } catch {
+            $formClientSize = New-Object System.Drawing.Size(1020,720)
+        }
+    } else {
+        $formClientSize = New-Object System.Drawing.Size(1020,720)
+    }
+
+    $width = [int]$formClientSize.Width
+    $height = [int]$formClientSize.Height
+    $w = [Math]::Max(100, $width - 40)
+    $h = [Math]::Max(100, $height - ($TopTable.Height + $MiddlePanel.Height + 48))
+
+    $TextBoxResult.Size = New-Object System.Drawing.Size($w, $h)
+    $TextBoxResult.Anchor = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Bottom -bor [System.Windows.Forms.AnchorStyles]::Left -bor [System.Windows.Forms.AnchorStyles]::Right
+    $Form.Controls.Add($TextBoxResult)
+}
+
 loadProjects
 [void] $Form.ShowDialog()
