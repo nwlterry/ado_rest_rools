@@ -71,8 +71,9 @@ $Form.Size = New-Object System.Drawing.Size(1000,570)
 ##---------------------------------------------------------------------------------------------------
 #Define Project ComboBox (will be populated from Azure DevOps)
 $ComboBoxProject = New-Object System.Windows.Forms.ComboBox
-$ComboBoxProject.Location = New-Object System.Drawing.Point(20,40)
-$ComboBoxProject.Size = New-Object System.Drawing.Size(200,40)
+# Position the project list over the "Query Default Branch" button (covers it visually)
+$ComboBoxProject.Location = New-Object System.Drawing.Point(140,20)
+$ComboBoxProject.Size = New-Object System.Drawing.Size(260,40)
 $ComboBoxProject.DropDownStyle = 'DropDownList'
 $ComboBoxProject.Enabled = $false
 
@@ -161,7 +162,8 @@ function loadProjects {
         }
         $projectsUrl = "https://$ADOServerFQDN/$collection/_apis/projects?api-version=6.0"
         $projectsResponse = Invoke-RestMethod -Method Get -Uri $projectsUrl -Headers $headers
-        foreach ($p in $projectsResponse.value) {
+        $projects = $projectsResponse.value | Sort-Object -Property name
+        foreach ($p in $projects) {
             $ComboBoxProject.Items.Add($p.name) | Out-Null
         }
         if ($ComboBoxProject.Items.Count -gt 0) { $ComboBoxProject.Enabled = $true }
@@ -204,6 +206,21 @@ $ButtonQueryRepos.Enabled = $false
 $ButtonQueryRepos.Add_Click( { queryAllRepo } )
 
 $Form.Controls.Add($ButtonQueryRepos)
+
+##---------------------------------------------------------------------------------------------------
+#Define Button to refresh projects list
+$ButtonRefreshProjects = New-Object System.Windows.Forms.Button
+$ButtonRefreshProjects.Location = New-Object System.Drawing.Size(420,20)
+$ButtonRefreshProjects.Size = New-Object System.Drawing.Size(120,40)
+$ButtonRefreshProjects.Text = "Refresh Projects"
+$ButtonRefreshProjects.Enabled = $true
+$ButtonRefreshProjects.Add_Click( {
+    $ButtonRefreshProjects.Enabled = $false
+    loadProjects
+    $ButtonRefreshProjects.Enabled = $true
+})
+
+$Form.Controls.Add($ButtonRefreshProjects)
 
 ##---------------------------------------------------------------------------------------------------
 #Define Button of update repos default branch
