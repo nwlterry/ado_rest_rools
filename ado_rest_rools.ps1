@@ -67,14 +67,16 @@ $Form.BackColor = "DarkGray"
 $Form.Size = New-Object System.Drawing.Size(1000,570)
 
 ###===================================================================================================
-##Define Input Text Box
+##Define Project Dropdown
 ##---------------------------------------------------------------------------------------------------
-#Define Project Input Text Box Label
-$TextBoxProject = New-Object System.Windows.Forms.TextBox
-$TextBoxProject.Location = New-Object System.Drawing.Point(20,40)
-$TextBoxProject.Size = New-Object System.Drawing.Size(100,40)
+#Define Project ComboBox (will be populated from Azure DevOps)
+$ComboBoxProject = New-Object System.Windows.Forms.ComboBox
+$ComboBoxProject.Location = New-Object System.Drawing.Point(20,40)
+$ComboBoxProject.Size = New-Object System.Drawing.Size(200,40)
+$ComboBoxProject.DropDownStyle = 'DropDownList'
+$ComboBoxProject.Enabled = $false
 
-$Form.Controls.Add($TextBoxProject)
+$Form.Controls.Add($ComboBoxProject)
 
 ###===================================================================================================
 ##Define Output Text Box
@@ -147,6 +149,26 @@ $ObjBoxBranch.Items.Add('Develop') | Out-Null
 $ObjBoxBranch.Items.Add('Main') | Out-Null
 
 $Form.Controls.Add($ObjBoxBranch)
+
+##---------------------------------------------------------------------------------------------------
+# Load projects from Azure DevOps and populate project dropdown
+function loadProjects {
+    try {
+        $ComboBoxProject.Items.Clear()
+        if ([string]::IsNullOrWhiteSpace($ADOServerFQDN) -or [string]::IsNullOrWhiteSpace($collection)) {
+            $TextBoxResult.AppendText("Please set `ADOServerFQDN` and `collection` before loading projects.`r`n")
+            return
+        }
+        $projectsUrl = "https://$ADOServerFQDN/$collection/_apis/projects?api-version=6.0"
+        $projectsResponse = Invoke-RestMethod -Method Get -Uri $projectsUrl -Headers $headers
+        foreach ($p in $projectsResponse.value) {
+            $ComboBoxProject.Items.Add($p.name) | Out-Null
+        }
+        if ($ComboBoxProject.Items.Count -gt 0) { $ComboBoxProject.Enabled = $true }
+    } catch {
+        $TextBoxResult.AppendText("Failed to load projects: $_`r`n")
+    }
+}
 
 ##---------------------------------------------------------------------------------------------------
 #Define Policy Type Dropdown menu label
@@ -338,7 +360,8 @@ function writeLog
 ##---------------------------------------------------------------------------------------------------
 #Define Function to query all repos
 function queryAllRepo {
-    $projectName = $TextBoxProject.Text.ToString()
+    $projectName = $ComboBoxProject.Text.ToString()
+    $projectNameEnc = [uri]::EscapeDataString($projectName)
     $timeStamp = (Get-Date).toString("yyyy/MM/dd HH:mm:ss")
 
     $TextBoxResult.Clear()
@@ -346,7 +369,7 @@ function queryAllRepo {
     $formTitle = "Query default branch of all repositories in project $($projectName) Result"
     $Form.Text = $formTitle
 
-    $reposUrl = "https://$ADOServerFQDN/$collection/$projectName/_apis/git/repositories?api-version=6.0"
+    $reposUrl = "https://$ADOServerFQDN/$collection/$projectNameEnc/_apis/git/repositories?api-version=6.0"
     $reposResponse = Invoke-RestMethod -Method Get -Uri $reposUrl -Headers $headers
 
     $TextBoxResult.Text = "$($timeStamp) The default branch of each repository:"
@@ -356,7 +379,7 @@ function queryAllRepo {
         $TextBoxResult.AppendText("`r`n")
         $TextBoxResult.Appendtext("$($timestamp) Project: $($projectName), Repository: $($repo.name), ID: $($repo.id), Default Branch: $($repo.defaultBranch)")
     }
-    [System.Windows.MessageBox]::Show("Query of default branch in all repositories`n of project $projectName completed","Process Result")
+    [System.Windows.Forms.MessageBox]::Show("Query of default branch in all repositories`n of project $projectName completed","Process Result")
     [string[]]$logOutput = $TextBoxResult.Text
     $logOutput = $logOutput.Replace("`r`n", "`r`n")
     writeLog
@@ -365,7 +388,8 @@ function queryAllRepo {
 ##---------------------------------------------------------------------------------------------------
 #Define Set Default Branch Function
 function setDefaultBranch {
-    $projectName = $TextBoxProject.Text.ToString()
+    $projectName = $ComboBoxProject.Text.ToString()
+    $projectNameEnc = [uri]::EscapeDataString($projectName)
     $timeStamp = (Get-Date).toString("yyyy/MM/dd HH:mm:ss")
 
     $TextBoxResult.Clear()
@@ -386,7 +410,7 @@ function setDefaultBranch {
         $toBranch = $toBranch.Substring(11,7)
     }
 
-    $reposUrl = "https://$ADOServerFQDN/$collection/$projectName/_apis/git/repositories?api-version=6.0"
+    $reposUrl = "https://$ADOServerFQDN/$collection/$projectNameEnc/_apis/git/repositories?api-version=6.0"
     $reposResponse = Invoke-RestMethod -Method Get -Uri $reposUrl -Headers $headers
 
     $TextBoxResult.Text = "$($timeStamp) Setting default branch to $($toBranch.ToUpper()) of each repos:"
@@ -397,7 +421,7 @@ function setDefaultBranch {
         $TextBoxResult.AppendText("$($timeStamp) Setting default branch to $($toBranch.ToUpper()) of repository $($repo.name):")
         $TextBoxResult.AppendText("`r`n")
         $TextBoxResult.AppendText("$($timeStamp) Project: $($projectName), Repository: $($repo.name), ID: $($repo.id), Default Branch: $($repo.defaultBranch)")
-        $branchUrl = "https://$ADOServerFQDN/$collection/$projectName/_apis/git/repositories/$($repo.id)?api-version=6.0"
+        $branchUrl = "https://$ADOServerFQDN/$collection/$projectNameEnc/_apis/git/repositories/$($repo.id)?api-version=6.0"
         $TextBoxResult.AppendText("`r`n")
         $TextBoxResult.AppendText("$($timeStamp) Setting the default branch......")
         #$branchRESTPatch = Invoke-RestMethod -Uri $branchUrl -Method Patch -Headers $headers -ContentType "application/json" -Body ($jsonData | ConvertTo-Json)
@@ -405,10 +429,10 @@ function setDefaultBranch {
         $branchRESTGet = Invoke-RestMethod -Uri $branchUrl -Method Get -Headers $headers
         $TextBoxResult.AppendText("`r`n")
         $TextBoxResult.AppendText("$($timeStamp) Project: $($projectName), Repository: $($repo.name), ID: $($repo.id), Default Branch: $($branchRESTGet.defaultBranch)")
-        [System.Windows.MessageBox]::Show("Setting default branch in repository`n $($repo.name) of project $projectName completed","Process Result")
+        [System.Windows.Forms.MessageBox]::Show("Setting default branch in repository`n $($repo.name) of project $projectName completed","Process Result")
     }
 
-    [System.Windows.MessageBox]::Show("Setting default branch on all repositories of project $projectName completed","Process Result")
+    [System.Windows.Forms.MessageBox]::Show("Setting default branch on all repositories of project $projectName completed","Process Result")
     [string[]]$logOutput = $TextBoxResult.Text
     $logOutput = $logOutput.Replace("`r`n", "`r`n")
     writeLog
@@ -419,7 +443,8 @@ function setDefaultBranch {
 ##---------------------------------------------------------------------------------------------------
 #Define Function to query project base policy
 function queryProjectPolicy {
-    $projectName = $TextBoxProject.Text.ToString()
+    $projectName = $ComboBoxProject.Text.ToString()
+    $projectNameEnc = [uri]::EscapeDataString($projectName)
     $timeStamp = (Get-Date).toString("yyyy/MM/dd HH:mm:ss")
 
     $TextBoxResult.Clear()
@@ -437,7 +462,7 @@ function queryProjectPolicy {
     #$reposUrl = "https://$ADOServerFQDN/$collection/$projectName/_apis/git/repositories?api-version=6.0"
     #$reposResponse = Invoke-RestMethod -Method Get -Uri $reposUrl -Headers $headers
 
-    $policiesUrl = "https://$ADOServerFQDN/$collection/$projectName/_apis/policy/configurations?api-version=6.0"
+    $policiesUrl = "https://$ADOServerFQDN/$collection/$projectNameEnc/_apis/policy/configurations?api-version=6.0"
     $policiesResponse = Invoke-RestMethod -Method Get -Uri $policiesUrl -Headers $headers
 
     foreach ($policy in $policiesResponse.value) {
@@ -468,7 +493,7 @@ function queryProjectPolicy {
     $TextBoxResult.AppendText("`r`n")
     $TextBoxResult.AppendText("Query repositories policy of project $projectName completed")
 
-    [System.Windows.MessageBox]::Show("Query reporistoty policies of project`n$projectName completed","Process Result")
+    [System.Windows.Forms.MessageBox]::Show("Query reporistoty policies of project`n$projectName completed","Process Result")
     [string[]]$logOutput = $TextBoxResult.Text
     $logOutput = $logOutput.Replace("`r`n", "`r`n")
     writeLog
@@ -477,7 +502,8 @@ function queryProjectPolicy {
 ##---------------------------------------------------------------------------------------------------
 #Define Function to disable project base policy
 function disableProjectPolicy {
-    $projectName = $TextBoxProject.Text.ToString()
+    $projectName = $ComboBoxProject.Text.ToString()
+    $projectNameEnc = [uri]::EscapeDataString($projectName)
     $timeStamp = (Get-Date).toString("yyyy/MM/dd HH:mm:ss")
 
     $TextBoxResult.Clear()
@@ -495,12 +521,12 @@ function disableProjectPolicy {
     #$reposUrl = "https://$ADOServerFQDN/$collection/$projectName/_apis/git/repositories?api-version=6.0"
     #$reposResponse = Invoke-RestMethod -Method Get -Uri $reposUrl -Headers $headers
 
-    $policiesUrl = "https://$ADOServerFQDN/$collection/$projectName/_apis/policy/configurations?api-version=6.0"
+    $policiesUrl = "https://$ADOServerFQDN/$collection/$projectNameEnc/_apis/policy/configurations?api-version=6.0"
     $policiesResponse = Invoke-RestMethod -Method Get -Uri $policiesUrl -Headers $headers
 
     foreach ($policy in $policiesResponse.value) {
         if ($null -eq $policy.settings.scope.repositoryId -And $null -eq $policy.settings.scope.refName) {
-            $policiesPutUrl = "https://$ADOServerFQDN/DevOpsCollection/$projectName/_apis/policy/configurations/$($policy.id)?api-version=6.0"
+            $policiesPutUrl = "https://$ADOServerFQDN/DevOpsCollection/$projectNameEnc/_apis/policy/configurations/$($policy.id)?api-version=6.0"
             $policyJson = $policy | ConvertTo-Json -Depth 10
             $policyObject = ConvertFrom-Json -InputObject $policyJson
             $policyObject.PSObject.Methods.Remove("createdBy")
@@ -537,7 +563,7 @@ function disableProjectPolicy {
     $TextBoxResult.AppendText("`r`n")
     $TextBoxResult.AppendText("Disable project level policies of project $projectName completed")
 
-    [System.Windows.MessageBox]::Show("Disable project level policies of project`n$projectName completed","Process Result")
+    [System.Windows.Forms.MessageBox]::Show("Disable project level policies of project`n$projectName completed","Process Result")
     [string[]]$logOutput = $TextBoxResult.Text
     $logOutput = $logOutput.Replace("`r`n", "`r`n")
     writeLog
@@ -546,7 +572,8 @@ function disableProjectPolicy {
 ##---------------------------------------------------------------------------------------------------
 #Define Function to enable project base policy
 function enableProjectPolicy {
-    $projectName = $TextBoxProject.Text.ToString()
+    $projectName = $ComboBoxProject.Text.ToString()
+    $projectNameEnc = [uri]::EscapeDataString($projectName)
     $timeStamp = (Get-Date).toString("yyyy/MM/dd HH:mm:ss")
 
     $TextBoxResult.Clear()
@@ -564,12 +591,12 @@ function enableProjectPolicy {
     #$reposUrl = "https://$ADOServerFQDN/$collection/$projectName/_apis/git/repositories?api-version=6.0"
     #$reposResponse = Invoke-RestMethod -Method Get -Uri $reposUrl -Headers $headers
 
-    $policiesUrl = "https://$ADOServerFQDN/$collection/$projectName/_apis/policy/configurations?api-version=6.0"
+    $policiesUrl = "https://$ADOServerFQDN/$collection/$projectNameEnc/_apis/policy/configurations?api-version=6.0"
     $policiesResponse = Invoke-RestMethod -Method Get -Uri $policiesUrl -Headers $headers
 
     foreach ($policy in $policiesResponse.value) {
         if ($null -eq $policy.settings.scope.repositoryId -And $null -eq $policy.settings.scope.refName) {
-            $policiesPutUrl = "https://$ADOServerFQDN/DevOpsCollection/$projectName/_apis/policy/configurations/$($policy.id)?api-version=6.0"
+            $policiesPutUrl = "https://$ADOServerFQDN/DevOpsCollection/$projectNameEnc/_apis/policy/configurations/$($policy.id)?api-version=6.0"
             $policyJson = $policy | ConvertTo-Json -Depth 10
             $policyObject = ConvertFrom-Json -InputObject $policyJson
             $policyObject.PSObject.Methods.Remove("createdBy")
@@ -606,7 +633,7 @@ function enableProjectPolicy {
     $TextBoxResult.AppendText("`r`n")
     $TextBoxResult.AppendText("Enable project level policies of project $projectName completed")
 
-    [System.Windows.MessageBox]::Show("Enable project level policies of project`n$projectName completed","Process Result")
+    [System.Windows.Forms.MessageBox]::Show("Enable project level policies of project`n$projectName completed","Process Result")
     [string[]]$logOutput = $TextBoxResult.Text
     $logOutput = $logOutput.Replace("`r`n", "`r`n")
     writeLog
@@ -615,7 +642,8 @@ function enableProjectPolicy {
 ##---------------------------------------------------------------------------------------------------
 #Define Function to delete project base policy
 function deleteProjectPolicy {
-    $projectName = $TextBoxProject.Text.ToString()
+    $projectName = $ComboBoxProject.Text.ToString()
+    $projectNameEnc = [uri]::EscapeDataString($projectName)
     $timeStamp = (Get-Date).toString("yyyy/MM/dd HH:mm:ss")
 
     $TextBoxResult.Text = "Please enter passcode to process"
@@ -635,12 +663,12 @@ function deleteProjectPolicy {
         #$reposUrl = "https://$ADOServerFQDN/$collection/$projectName/_apis/git/repositories?api-version=6.0"
         #$reposResponse = Invoke-RestMethod -Method Get -Uri $reposUrl -Headers $headers
 
-        $policiesUrl = "https://$ADOServerFQDN/$collection/$projectName/_apis/policy/configurations?api-version=6.0"
+        $policiesUrl = "https://$ADOServerFQDN/$collection/$projectNameEnc/_apis/policy/configurations?api-version=6.0"
         $policiesResponse = Invoke-RestMethod -Method Get -Uri $policiesUrl -Headers $headers
 
         foreach ($policy in $policiesResponse.value) {
             if ($null -eq $policy.settings.scope.repositoryId -And $null -eq $policy.settings.scope.refName) {
-                $policyPutUrl = "https://$ADOServerFQDN/$collection/$projectName/_apis/policy/configurations/$($policy.id)?api-version=6.0"
+                $policyPutUrl = "https://$ADOServerFQDN/$collection/$projectNameEnc/_apis/policy/configurations/$($policy.id)?api-version=6.0"
                 #$policyPutResponse = Invoke-RestMethod $policyPutUrl -Method Delete -Headers $headers -ContentType "application/json" -Body $jsonData
                 Invoke-RestMethod $policyPutUrl -Method Delete -Headers $headers -ContentType "application/json" -Body $jsonData
             }
@@ -655,7 +683,7 @@ function deleteProjectPolicy {
     $TextBoxResult.AppendText("`r`n")
     $TextBoxResult.AppendText("Delete project level policies of project $projectName completed")
 
-    [System.Windows.MessageBox]::Show("Delete project level policies of project`n$projectName completed","Process Result")
+    [System.Windows.Forms.MessageBox]::Show("Delete project level policies of project`n$projectName completed","Process Result")
     [string[]]$logOutput = $TextBoxResult.Text
     $logOutput = $logOutput.Replace("`r`n", "`r`n")
     writeLog
@@ -666,7 +694,8 @@ function deleteProjectPolicy {
 ##---------------------------------------------------------------------------------------------------
 #Define Function to query repository base policy
 function queryReposPolicy {
-    $projectName = $TextBoxProject.Text.ToString()
+    $projectName = $ComboBoxProject.Text.ToString()
+    $projectNameEnc = [uri]::EscapeDataString($projectName)
     $timeStamp = (Get-Date).toString("yyyy/MM/dd HH:mm:ss")
 
     $TextBoxResult.Clear()
@@ -681,10 +710,10 @@ function queryReposPolicy {
 
     $policiesObject = [System.Collections.Generic.List[object]]::new()
 
-    $reposUrl = "https://$ADOServerFQDN/$collection/$projectName/_apis/git/repositories?api-version=6.0"
+    $reposUrl = "https://$ADOServerFQDN/$collection/$projectNameEnc/_apis/git/repositories?api-version=6.0"
     $reposResponse = Invoke-RestMethod -Method Get -Uri $reposUrl -Headers $headers
 
-    $policiesUrl = "https://$ADOServerFQDN/$collection/$projectName/_apis/policy/configurations?api-version=6.0"
+    $policiesUrl = "https://$ADOServerFQDN/$collection/$projectNameEnc/_apis/policy/configurations?api-version=6.0"
     $policiesResponse = Invoke-RestMethod -Method Get -Uri $policiesUrl -Headers $headers
 
     foreach ($policy in $policiesResponse.value) {
@@ -731,7 +760,7 @@ function queryReposPolicy {
     $TextBoxResult.AppendText("`r`n")
     $TextBoxResult.AppendText("Query repositories policy of project $projectName completed")
 
-    [System.Windows.MessageBox]::Show("Query reporistoty policies of project`n$projectName completed","Process Result")
+    [System.Windows.Forms.MessageBox]::Show("Query reporistoty policies of project`n$projectName completed","Process Result")
     [string[]]$logOutput = $TextBoxResult.Text
     $logOutput = $logOutput.Replace("`r`n", "`r`n")
     writeLog
@@ -740,7 +769,8 @@ function queryReposPolicy {
 ##---------------------------------------------------------------------------------------------------
 #Define Function to disable repository base policy
 function disableReposPolicy {
-    $projectName = $TextBoxProject.Text.ToString()
+    $projectName = $ComboBoxProject.Text.ToString()
+    $projectNameEnc = [uri]::EscapeDataString($projectName)
     $timeStamp = (Get-Date).toString("yyyy/MM/dd HH:mm:ss")
 
     $TextBoxResult.Clear()
@@ -755,15 +785,15 @@ function disableReposPolicy {
     $TextBoxResult.Appendtext("$($timeStamp) Project: $($projectName)")
     $TextBoxResult.Appendtext("`n`n")
 
-    $reposUrl = "https://$ADOServerFQDN/$collection/$projectName/_apis/git/repositories?api-version=6.0"
+    $reposUrl = "https://$ADOServerFQDN/$collection/$projectNameEnc/_apis/git/repositories?api-version=6.0"
     $reposResponse = Invoke-RestMethod -Method Get -Uri $reposUrl -Headers $headers
 
-    $policiesUrl = "https://$ADOServerFQDN/$collection/$projectName/_apis/policy/configurations?api-version=6.0"
+    $policiesUrl = "https://$ADOServerFQDN/$collection/$projectNameEnc/_apis/policy/configurations?api-version=6.0"
     $policiesResponse = Invoke-RestMethod -Method Get -Uri $policiesUrl -Headers $headers
 
     foreach ($policy in $policiesResponse.value) {
         if ($null -ne $policy.settings.scope.repositoryId -And $null -ne $policy.settings.scope.refName) {
-            $policiesPutUrl = "https://$ADOServerFQDN/DevOpsCollection/$projectName/_apis/policy/configurations/$($policy.id)?api-version=6.0"
+            $policiesPutUrl = "https://$ADOServerFQDN/DevOpsCollection/$projectNameEnc/_apis/policy/configurations/$($policy.id)?api-version=6.0"
             $policyJson = $policy | ConvertTo-Json -Depth 10
             $policyObject = ConvertFrom-Json -InputObject $policyJson
             $policyObject.PSObject.Methods.Remove("createdBy")
@@ -814,7 +844,7 @@ function disableReposPolicy {
     $TextBoxResult.AppendText("`r`n")
     $TextBoxResult.AppendText("Disable repositories policy of project $projectName completed")
 
-    [System.Windows.MessageBox]::Show("Disable repositories policy of project`n$projectName completed","Process Result")
+    [System.Windows.Forms.MessageBox]::Show("Disable repositories policy of project`n$projectName completed","Process Result")
     [string[]]$logOutput = $TextBoxResult.Text
     $logOutput = $logOutput.Replace("`r`n", "`r`n")
     writeLog
@@ -823,7 +853,8 @@ function disableReposPolicy {
 ##---------------------------------------------------------------------------------------------------
 #Define Function to enable repository base policy
 function enableReposPolicy {
-    $projectName = $TextBoxProject.Text.ToString()
+    $projectName = $ComboBoxProject.Text.ToString()
+    $projectNameEnc = [uri]::EscapeDataString($projectName)
     $timeStamp = (Get-Date).toString("yyyy/MM/dd HH:mm:ss")
 
     $TextBoxResult.Clear()
@@ -838,15 +869,15 @@ function enableReposPolicy {
     $TextBoxResult.Appendtext("$($timeStamp) Project: $($projectName)")
     $TextBoxResult.Appendtext("`n`n")
 
-    $reposUrl = "https://$ADOServerFQDN/$collection/$projectName/_apis/git/repositories?api-version=6.0"
+    $reposUrl = "https://$ADOServerFQDN/$collection/$projectNameEnc/_apis/git/repositories?api-version=6.0"
     $reposResponse = Invoke-RestMethod -Method Get -Uri $reposUrl -Headers $headers
 
-    $policiesUrl = "https://$ADOServerFQDN/$collection/$projectName/_apis/policy/configurations?api-version=6.0"
+    $policiesUrl = "https://$ADOServerFQDN/$collection/$projectNameEnc/_apis/policy/configurations?api-version=6.0"
     $policiesResponse = Invoke-RestMethod -Method Get -Uri $policiesUrl -Headers $headers
 
     foreach ($policy in $policiesResponse.value) {
         if ($null -ne $policy.settings.scope.repositoryId -And $null -ne $policy.settings.scope.refName) {
-            $policiesPutUrl = "https://$ADOServerFQDN/DevOpsCollection/$projectName/_apis/policy/configurations/$($policy.id)?api-version=6.0"
+                    $policiesPutUrl = "https://$ADOServerFQDN/DevOpsCollection/$projectNameEnc/_apis/policy/configurations/$($policy.id)?api-version=6.0"
             $policyJson = $policy | ConvertTo-Json -Depth 10
             $policyObject = ConvertFrom-Json -InputObject $policyJson
             $policyObject.PSObject.Methods.Remove("createdBy")
@@ -897,7 +928,7 @@ function enableReposPolicy {
     $TextBoxResult.AppendText("`r`n")
     $TextBoxResult.AppendText("Enable repositories policy of project $projectName completed")
 
-    [System.Windows.MessageBox]::Show("Enable repositories policy of project`n$projectName completed","Process Result")
+    [System.Windows.Forms.MessageBox]::Show("Enable repositories policy of project`n$projectName completed","Process Result")
     [string[]]$logOutput = $TextBoxResult.Text
     $logOutput = $logOutput.Replace("`r`n", "`r`n")
     writeLog
@@ -906,7 +937,8 @@ function enableReposPolicy {
 ##---------------------------------------------------------------------------------------------------
 #Define Function to delete repository base policy
 function deleteReposPolicy {
-    $projectName = $TextBoxProject.Text.ToString()
+    $projectName = $ComboBoxProject.Text.ToString()
+    $projectNameEnc = [uri]::EscapeDataString($projectName)
     $timeStamp = (Get-Date).toString("yyyy/MM/dd HH:mm:ss")
 
     $TextBoxResult.Text = "Please enter passcode to process"
@@ -926,12 +958,12 @@ function deleteReposPolicy {
         #$reposUrl = "https://$ADOServerFQDN/$collection/$projectName/_apis/git/repositories?api-version=6.0"
         #$reposResponse = Invoke-RestMethod -Method Get -Uri $reposUrl -Headers $headers
 
-        $policiesUrl = "https://$ADOServerFQDN/$collection/$projectName/_apis/policy/configurations?api-version=6.0"
+        $policiesUrl = "https://$ADOServerFQDN/$collection/$projectNameEnc/_apis/policy/configurations?api-version=6.0"
         $policiesResponse = Invoke-RestMethod -Method Get -Uri $policiesUrl -Headers $headers
 
         foreach ($policy in $policiesResponse.value) {
             if ($null -ne $policy.settings.scope.repositoryId -And $null -ne $policy.settings.scope.refName) {
-                $policyPutUrl = "https://$ADOServerFQDN/$collection/$projectName/_apis/policy/configurations/$($policy.id)?api-version=6.0"
+                $policyPutUrl = "https://$ADOServerFQDN/$collection/$projectNameEnc/_apis/policy/configurations/$($policy.id)?api-version=6.0"
                 #$policyPutResponse = Invoke-RestMethod $policyPutUrl -Method Delete -Headers $headers -ContentType "application/json" -Body $jsonData
                 Invoke-RestMethod $policyPutUrl -Method Delete -Headers $headers -ContentType "application/json" -Body $jsonData
             }
@@ -943,7 +975,7 @@ function deleteReposPolicy {
         $TextBoxResult.Text = "Passcode incorrect or user cancelled"
     }
 
-    [System.Windows.MessageBox]::Show("Delete project level policies of project`n$projectName completed","Process Result")
+    [System.Windows.Forms.MessageBox]::Show("Delete project level policies of project`n$projectName completed","Process Result")
     [string[]]$logOutput = $TextBoxResult.Text
     $logOutput = $logOutput.Replace("`r`n", "`r`n")
     writeLog
@@ -954,7 +986,8 @@ function deleteReposPolicy {
 ##---------------------------------------------------------------------------------------------------
 #Define Function to Query self approval
 function querySelfApproval {
-    $projectName = $TextBoxProject.Text.ToString()
+    $projectName = $ComboBoxProject.Text.ToString()
+    $projectNameEnc = [uri]::EscapeDataString($projectName)
     $timeStamp = (Get-Date).toString("yyyy/MM/dd HH:mm:ss")
 
     $TextBoxResult.Clear()
@@ -969,10 +1002,10 @@ function querySelfApproval {
     $TextBoxResult.Appendtext("$($timeStamp) Project: $($projectName)")
     $TextBoxResult.Appendtext("`n`n")
 
-    $reposUrl = "https://$ADOServerFQDN/$collection/$projectName/_apis/git/repositories?api-version=6.0"
+    $reposUrl = "https://$ADOServerFQDN/$collection/$projectNameEnc/_apis/git/repositories?api-version=6.0"
     $reposResponse = Invoke-RestMethod -Method Get -Uri $reposUrl -Headers $headers
 
-    $policiesUrl = "https://$ADOServerFQDN/$collection/$projectName/_apis/policy/configurations?api-version=6.0"
+    $policiesUrl = "https://$ADOServerFQDN/$collection/$projectNameEnc/_apis/policy/configurations?api-version=6.0"
     $policiesResponse = Invoke-RestMethod -Method Get -Uri $policiesUrl -Headers $headers
 
     foreach ($policy in $policiesResponse.value) {
@@ -1018,7 +1051,7 @@ function querySelfApproval {
     $TextBoxResult.AppendText("`r`n")
     $TextBoxResult.AppendText("Query repositories self approval of project $projectName completed")
 
-    [System.Windows.MessageBox]::Show("Query repositories self approval of project`n$projectName completed","Process Result")
+    [System.Windows.Forms.MessageBox]::Show("Query repositories self approval of project`n$projectName completed","Process Result")
     [string[]]$logOutput = $TextBoxResult.Text
     $logOutput = $logOutput.Replace("`r`n", "`r`n")
     writeLog
@@ -1030,7 +1063,8 @@ function querySelfApproval {
 ##---------------------------------------------------------------------------------------------------
 #Define Function to Enable self approval
 function enableSelfApproval {
-    $projectName = $TextBoxProject.Text.ToString()
+    $projectName = $ComboBoxProject.Text.ToString()
+    $projectNameEnc = [uri]::EscapeDataString($projectName)
     $timeStamp = (Get-Date).toString("yyyy/MM/dd HH:mm:ss")
 
     $TextBoxResult.Clear()
@@ -1045,15 +1079,15 @@ function enableSelfApproval {
     $TextBoxResult.Appendtext("$($timeStamp) Project: $($projectName)")
     $TextBoxResult.Appendtext("`n`n")
 
-    $reposUrl = "https://$ADOServerFQDN/$collection/$projectName/_apis/git/repositories?api-version=6.0"
+    $reposUrl = "https://$ADOServerFQDN/$collection/$projectNameEnc/_apis/git/repositories?api-version=6.0"
     $reposResponse = Invoke-RestMethod -Method Get -Uri $reposUrl -Headers $headers
 
-    $policiesUrl = "https://$ADOServerFQDN/$collection/$projectName/_apis/policy/configurations?api-version=6.0"
+    $policiesUrl = "https://$ADOServerFQDN/$collection/$projectNameEnc/_apis/policy/configurations?api-version=6.0"
     $policiesResponse = Invoke-RestMethod -Method Get -Uri $policiesUrl -Headers $headers
 
     foreach ($policy in $policiesResponse.value) {
         if ($policy.Type.id -eq "fa4e907d-c16b-4a4c-9dfa-4906e5d171dd") {
-            $policiesPutUrl = "https://$ADOServerFQDN/DevOpsCollection/$projectName/_apis/policy/configurations/$($policy.id)?api-version=6.0"
+            $policiesPutUrl = "https://$ADOServerFQDN/DevOpsCollection/$projectNameEnc/_apis/policy/configurations/$($policy.id)?api-version=6.0"
             $policyJson = $policy | ConvertTo-Json -Depth 10
             $policyObject = ConvertFrom-Json -InputObject $policyJson
             $policyObject.PSObject.Methods.Remove("createdBy")
@@ -1111,7 +1145,7 @@ function enableSelfApproval {
     $TextBoxResult.AppendText("`r`n")
     $TextBoxResult.AppendText("Enable repositories self approval of project $projectName completed")
 
-    [System.Windows.MessageBox]::Show("Enable repositories self approval of project`n$projectName completed","Process Result")
+    [System.Windows.Forms.MessageBox]::Show("Enable repositories self approval of project`n$projectName completed","Process Result")
     [string[]]$logOutput = $TextBoxResult.Text
     $logOutput = $logOutput.Replace("`r`n", "`r`n")
     writeLog
@@ -1120,7 +1154,8 @@ function enableSelfApproval {
 ##---------------------------------------------------------------------------------------------------
 #Define Function to disable self approval
 function disableSelfApproval {
-    $projectName = $TextBoxProject.Text.ToString()
+    $projectName = $ComboBoxProject.Text.ToString()
+    $projectNameEnc = [uri]::EscapeDataString($projectName)
     $timeStamp = (Get-Date).toString("yyyy/MM/dd HH:mm:ss")
 
     $TextBoxResult.Clear()
@@ -1135,15 +1170,15 @@ function disableSelfApproval {
     $TextBoxResult.Appendtext("$($timeStamp) Project: $($projectName)")
     $TextBoxResult.Appendtext("`n`n")
 
-    $reposUrl = "https://$ADOServerFQDN/$collection/$projectName/_apis/git/repositories?api-version=6.0"
+    $reposUrl = "https://$ADOServerFQDN/$collection/$projectNameEnc/_apis/git/repositories?api-version=6.0"
     $reposResponse = Invoke-RestMethod -Method Get -Uri $reposUrl -Headers $headers
 
-    $policiesUrl = "https://$ADOServerFQDN/$collection/$projectName/_apis/policy/configurations?api-version=6.0"
+    $policiesUrl = "https://$ADOServerFQDN/$collection/$projectNameEnc/_apis/policy/configurations?api-version=6.0"
     $policiesResponse = Invoke-RestMethod -Method Get -Uri $policiesUrl -Headers $headers
 
     foreach ($policy in $policiesResponse.value) {
        if ($policy.Type.id -eq "fa4e907d-c16b-4a4c-9dfa-4906e5d171dd") {
-            $policiesPutUrl = "https://$ADOServerFQDN/DevOpsCollection/$projectName/_apis/policy/configurations/$($policy.id)?api-version=6.0"
+            $policiesPutUrl = "https://$ADOServerFQDN/DevOpsCollection/$projectNameEnc/_apis/policy/configurations/$($policy.id)?api-version=6.0"
             $policyJson = $policy | ConvertTo-Json -Depth 10
             $policyObject = ConvertFrom-Json -InputObject $policyJson
             $policyObject.PSObject.Methods.Remove("createdBy")
@@ -1201,7 +1236,7 @@ function disableSelfApproval {
     $TextBoxResult.AppendText("`r`n")
     $TextBoxResult.AppendText("Disable repositories self approval of project $projectName completed")
 
-    [System.Windows.MessageBox]::Show("Disable repositories self approval of project`n$projectName completed","Process Result")
+    [System.Windows.Forms.MessageBox]::Show("Disable repositories self approval of project`n$projectName completed","Process Result")
     [string[]]$logOutput = $TextBoxResult.Text
     $logOutput = $logOutput.Replace("`r`n", "`r`n")
     writeLog
@@ -1211,8 +1246,8 @@ function disableSelfApproval {
 ##Button Enable Disable Checking
 ##---------------------------------------------------------------------------------------------------
 #Enable/Disbaled Button until project name is inputed
-$TextBoxProject.Add_TextChanged({
-    if ($TextBoxProject.TextLength -gt 0) {
+$ComboBoxProject.Add_SelectedIndexChanged({
+    if ($ComboBoxProject.SelectedIndex -ne -1) {
         $ButtonQueryRepos.Enabled = $true
         $ButtonQueryProjectPolicy.Enabled = $true
         $ButtonDisableProjectPolicy.Enabled = $true
@@ -1226,7 +1261,7 @@ $TextBoxProject.Add_TextChanged({
         $ButtonEnableSelfApproval.Enabled = $true
         $ButtonDisableSelfApproval.Enabled = $true
         $ObjBoxBranch.Enabled = $true
-        $LabelDisplayProject.Text = $TextBoxProject.Text
+        $LabelDisplayProject.Text = $ComboBoxProject.Text
         $LabelDisplayProject.BackColor = "Black"
         $LabelDisplayProject.ForeColor = "White"
         if ($ObjBoxBranch.Selectedindex -ne -1) {
@@ -1260,7 +1295,7 @@ $TextBoxProject.Add_TextChanged({
 $ObjBoxBranch.Add_SelectedIndexChanged({
     if ($ObjBoxBranch.Selectedindex -ne -1) {
         $ButtonSetDefaultBranch.Enabled = $true
-#        if ($TextBoxProject.TextLength -gt 0) {
+#        if ($ComboBoxProject.TextLength -gt 0) {
 #            $ButtonQueryRepos.Enabled = $true
 #            $ButtonQueryProjectPolicy.Enabled = $true
 #            $ButtonDisableProjectPolicy.Enabled = $true
@@ -1294,4 +1329,6 @@ $ObjBoxBranch.Add_SelectedIndexChanged({
 ##Loading Windows Form Object
 ##---------------------------------------------------------------------------------------------------
 #Loading Windows Form
+# Attempt to load projects into the dropdown before showing the form
+loadProjects
 [void] $Form.ShowDialog()
