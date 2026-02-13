@@ -631,7 +631,12 @@ function queryProjectPolicy {
     #$reposResponse = Invoke-RestMethod -Method Get -Uri $reposUrl -Headers $headers
 
     $policiesUrl = "https://$ADOServerFQDN/$collection/$projectNameEnc/_apis/policy/configurations?api-version=6.0"
-    $policiesResponse = Invoke-RestMethod -Method Get -Uri $policiesUrl -Headers $headers
+    try {
+        $policiesResponse = Invoke-RestMethod -Method Get -Uri $policiesUrl -Headers $headers
+    } catch {
+        $TextBoxResult.AppendText("`r`n$($timeStamp) Failed to query project policies: $_`r`n")
+        return
+    }
 
     foreach ($policy in $policiesResponse.value) {
         # settings.scope can be a single object or an array; project-level policies have no repo/ref scope
@@ -704,41 +709,60 @@ function disableProjectPolicy {
     #$reposResponse = Invoke-RestMethod -Method Get -Uri $reposUrl -Headers $headers
 
     $policiesUrl = "https://$ADOServerFQDN/$collection/$projectNameEnc/_apis/policy/configurations?api-version=6.0"
-    $policiesResponse = Invoke-RestMethod -Method Get -Uri $policiesUrl -Headers $headers
+    try {
+        $policiesResponse = Invoke-RestMethod -Method Get -Uri $policiesUrl -Headers $headers
+    } catch {
+        $TextBoxResult.AppendText("`r`n$($timeStamp) Failed to query project policies: $_`r`n")
+        return
+    }
 
     foreach ($policy in $policiesResponse.value) {
-        if ($null -eq $policy.settings.scope.repositoryId -And $null -eq $policy.settings.scope.refName) {
-            $policiesPutUrl = "https://$ADOServerFQDN/DevOpsCollection/$projectNameEnc/_apis/policy/configurations/$($policy.id)?api-version=6.0"
-            $policyJson = $policy | ConvertTo-Json -Depth 10
-            $policyObject = ConvertFrom-Json -InputObject $policyJson
-            $policyObject.PSObject.Methods.Remove("createdBy")
-            $policyObject.PSObject.Methods.Remove("createdDate")
-            $policyObject.PSObject.Methods.Remove("_links")
-            $policyObject.PSObject.Methods.Remove("isDeleted")
-            $policyObject.PSObject.Methods.Remove("isEnterpriseManaged")
-            $policyObject.PSObject.Methods.Remove("revision")
-            $policyObject.PSObject.Methods.Remove("id")
-            $policyObject.PSObject.Methods.Remove("url")
-            $policyObject.isEnabled = $false
-            $policyObject.isBlocking = $false
-            $policyObject.type.PSObject.Methods.Remove("url")
-            $policyObject.type.PSObject.Methods.Remove("displayName")
-            $jsonData = $policyObject | ConvertTo-Json -Depth 10
-            #$policyPutResponse = Invoke-RestMethod $policiesPutUrl -Method Put -Headers $headers -ContentType "application/json" -Body $jsonData
-            Invoke-RestMethod $policiesPutUrl -Method Put -Headers $headers -ContentType "application/json" -Body $jsonData
-            $policyGetResponse = Invoke-RestMethod -Method Get -Uri $policiesUrl -Headers $headers
-            foreach ($response in $policyGetResponse.value) {
-                if ($response.id -eq $policy.id) {
-                     $policyEnabled = $response.isEnabled
-                }
+        $scopes = @()
+        if ($null -ne $policy.settings -and $null -ne $policy.settings.scope) {
+            $scopes = @($policy.settings.scope)
+        }
+        $hasRepoScope = $false
+        foreach ($s in $scopes) {
+            if ($null -ne $s.repositoryId -or $null -ne $s.refName) {
+                $hasRepoScope = $true
+                break
             }
-            $TextBoxResult.AppendText("`r`n")
-            $TextBoxResult.Appendtext("$($timeStamp) Policy Type : $($policy.Type.displayName)")
-            $TextBoxResult.AppendText("`r`n")
-            $TextBoxResult.Appendtext("$($timeStamp) Policy ID : $($policy.id)")
-            $TextBoxResult.AppendText("`r`n")
-            $TextBoxResult.Appendtext("$($timeStamp) Policy Enabled : $($policyEnabled)")
-            $TextBoxResult.AppendText("`r`n")
+        }
+        if (-not $hasRepoScope) {
+            try {
+                $policiesPutUrl = "https://$ADOServerFQDN/DevOpsCollection/$projectNameEnc/_apis/policy/configurations/$($policy.id)?api-version=6.0"
+                $policyJson = $policy | ConvertTo-Json -Depth 10
+                $policyObject = ConvertFrom-Json -InputObject $policyJson
+                $policyObject.PSObject.Properties.Remove("createdBy")
+                $policyObject.PSObject.Properties.Remove("createdDate")
+                $policyObject.PSObject.Properties.Remove("_links")
+                $policyObject.PSObject.Properties.Remove("isDeleted")
+                $policyObject.PSObject.Properties.Remove("isEnterpriseManaged")
+                $policyObject.PSObject.Properties.Remove("revision")
+                $policyObject.PSObject.Properties.Remove("id")
+                $policyObject.PSObject.Properties.Remove("url")
+                $policyObject.isEnabled = $false
+                $policyObject.isBlocking = $false
+                $policyObject.type.PSObject.Properties.Remove("url")
+                $policyObject.type.PSObject.Properties.Remove("displayName")
+                $jsonData = $policyObject | ConvertTo-Json -Depth 10
+                Invoke-RestMethod $policiesPutUrl -Method Put -Headers $headers -ContentType "application/json" -Body $jsonData
+                $policyGetResponse = Invoke-RestMethod -Method Get -Uri $policiesUrl -Headers $headers
+                foreach ($response in $policyGetResponse.value) {
+                    if ($response.id -eq $policy.id) {
+                         $policyEnabled = $response.isEnabled
+                    }
+                }
+                $TextBoxResult.AppendText("`r`n")
+                $TextBoxResult.Appendtext("$($timeStamp) Policy Type : $($policy.Type.displayName)")
+                $TextBoxResult.AppendText("`r`n")
+                $TextBoxResult.Appendtext("$($timeStamp) Policy ID : $($policy.id)")
+                $TextBoxResult.AppendText("`r`n")
+                $TextBoxResult.Appendtext("$($timeStamp) Policy Enabled : $($policyEnabled)")
+                $TextBoxResult.AppendText("`r`n")
+            } catch {
+                $TextBoxResult.AppendText("`r`n$($timeStamp) Failed to disable policy $($policy.id): $_`r`n")
+            }
         }
     }
 
@@ -774,41 +798,60 @@ function enableProjectPolicy {
     #$reposResponse = Invoke-RestMethod -Method Get -Uri $reposUrl -Headers $headers
 
     $policiesUrl = "https://$ADOServerFQDN/$collection/$projectNameEnc/_apis/policy/configurations?api-version=6.0"
-    $policiesResponse = Invoke-RestMethod -Method Get -Uri $policiesUrl -Headers $headers
+    try {
+        $policiesResponse = Invoke-RestMethod -Method Get -Uri $policiesUrl -Headers $headers
+    } catch {
+        $TextBoxResult.AppendText("`r`n$($timeStamp) Failed to query project policies: $_`r`n")
+        return
+    }
 
     foreach ($policy in $policiesResponse.value) {
-        if ($null -eq $policy.settings.scope.repositoryId -And $null -eq $policy.settings.scope.refName) {
-            $policiesPutUrl = "https://$ADOServerFQDN/DevOpsCollection/$projectNameEnc/_apis/policy/configurations/$($policy.id)?api-version=6.0"
-            $policyJson = $policy | ConvertTo-Json -Depth 10
-            $policyObject = ConvertFrom-Json -InputObject $policyJson
-            $policyObject.PSObject.Methods.Remove("createdBy")
-            $policyObject.PSObject.Methods.Remove("createdDate")
-            $policyObject.PSObject.Methods.Remove("_links")
-            $policyObject.PSObject.Methods.Remove("isDeleted")
-            $policyObject.PSObject.Methods.Remove("isEnterpriseManaged")
-            $policyObject.PSObject.Methods.Remove("revision")
-            $policyObject.PSObject.Methods.Remove("id")
-            $policyObject.PSObject.Methods.Remove("url")
-            $policyObject.isEnabled = $true
-            $policyObject.isBlocking = $true
-            $policyObject.type.PSObject.Methods.Remove("url")
-            $policyObject.type.PSObject.Methods.Remove("displayName")
-            $jsonData = $policyObject | ConvertTo-Json -Depth 10
-            #$policyPutResponse = Invoke-RestMethod $policiesPutUrl -Method Put -Headers $headers -ContentType "application/json" -Body $jsonData
-            Invoke-RestMethod $policiesPutUrl -Method Put -Headers $headers -ContentType "application/json" -Body $jsonData
-            $policyGetResponse = Invoke-RestMethod -Method Get -Uri $policiesUrl -Headers $headers
-            foreach ($response in $policyGetResponse.value) {
-                if ($response.id -eq $policy.id) {
-                     $policyEnabled = $response.isEnabled
-                }
+        $scopes = @()
+        if ($null -ne $policy.settings -and $null -ne $policy.settings.scope) {
+            $scopes = @($policy.settings.scope)
+        }
+        $hasRepoScope = $false
+        foreach ($s in $scopes) {
+            if ($null -ne $s.repositoryId -or $null -ne $s.refName) {
+                $hasRepoScope = $true
+                break
             }
-            $TextBoxResult.AppendText("`r`n")
-            $TextBoxResult.Appendtext("$($timeStamp) Policy Type : $($policy.Type.displayName)")
-            $TextBoxResult.AppendText("`r`n")
-            $TextBoxResult.Appendtext("$($timeStamp) Policy ID : $($policy.id)")
-            $TextBoxResult.AppendText("`r`n")
-            $TextBoxResult.Appendtext("$($timeStamp) Policy Enabled : $($policyEnabled)")
-            $TextBoxResult.AppendText("`r`n")
+        }
+        if (-not $hasRepoScope) {
+            try {
+                $policiesPutUrl = "https://$ADOServerFQDN/DevOpsCollection/$projectNameEnc/_apis/policy/configurations/$($policy.id)?api-version=6.0"
+                $policyJson = $policy | ConvertTo-Json -Depth 10
+                $policyObject = ConvertFrom-Json -InputObject $policyJson
+                $policyObject.PSObject.Properties.Remove("createdBy")
+                $policyObject.PSObject.Properties.Remove("createdDate")
+                $policyObject.PSObject.Properties.Remove("_links")
+                $policyObject.PSObject.Properties.Remove("isDeleted")
+                $policyObject.PSObject.Properties.Remove("isEnterpriseManaged")
+                $policyObject.PSObject.Properties.Remove("revision")
+                $policyObject.PSObject.Properties.Remove("id")
+                $policyObject.PSObject.Properties.Remove("url")
+                $policyObject.isEnabled = $true
+                $policyObject.isBlocking = $true
+                $policyObject.type.PSObject.Properties.Remove("url")
+                $policyObject.type.PSObject.Properties.Remove("displayName")
+                $jsonData = $policyObject | ConvertTo-Json -Depth 10
+                Invoke-RestMethod $policiesPutUrl -Method Put -Headers $headers -ContentType "application/json" -Body $jsonData
+                $policyGetResponse = Invoke-RestMethod -Method Get -Uri $policiesUrl -Headers $headers
+                foreach ($response in $policyGetResponse.value) {
+                    if ($response.id -eq $policy.id) {
+                         $policyEnabled = $response.isEnabled
+                    }
+                }
+                $TextBoxResult.AppendText("`r`n")
+                $TextBoxResult.Appendtext("$($timeStamp) Policy Type : $($policy.Type.displayName)")
+                $TextBoxResult.AppendText("`r`n")
+                $TextBoxResult.Appendtext("$($timeStamp) Policy ID : $($policy.id)")
+                $TextBoxResult.AppendText("`r`n")
+                $TextBoxResult.Appendtext("$($timeStamp) Policy Enabled : $($policyEnabled)")
+                $TextBoxResult.AppendText("`r`n")
+            } catch {
+                $TextBoxResult.AppendText("`r`n$($timeStamp) Failed to enable policy $($policy.id): $_`r`n")
+            }
         }
     }
 
@@ -846,13 +889,32 @@ function deleteProjectPolicy {
         #$reposResponse = Invoke-RestMethod -Method Get -Uri $reposUrl -Headers $headers
 
         $policiesUrl = "https://$ADOServerFQDN/$collection/$projectNameEnc/_apis/policy/configurations?api-version=6.0"
-        $policiesResponse = Invoke-RestMethod -Method Get -Uri $policiesUrl -Headers $headers
+        try {
+            $policiesResponse = Invoke-RestMethod -Method Get -Uri $policiesUrl -Headers $headers
+        } catch {
+            $TextBoxResult.AppendText("`r`n$($timeStamp) Failed to query project policies: $_`r`n")
+            return
+        }
 
         foreach ($policy in $policiesResponse.value) {
-            if ($null -eq $policy.settings.scope.repositoryId -And $null -eq $policy.settings.scope.refName) {
-                $policyPutUrl = "https://$ADOServerFQDN/$collection/$projectNameEnc/_apis/policy/configurations/$($policy.id)?api-version=6.0"
-                #$policyPutResponse = Invoke-RestMethod $policyPutUrl -Method Delete -Headers $headers -ContentType "application/json" -Body $jsonData
-                Invoke-RestMethod $policyPutUrl -Method Delete -Headers $headers -ContentType "application/json" -Body $jsonData
+            $scopes = @()
+            if ($null -ne $policy.settings -and $null -ne $policy.settings.scope) {
+                $scopes = @($policy.settings.scope)
+            }
+            $hasRepoScope = $false
+            foreach ($s in $scopes) {
+                if ($null -ne $s.repositoryId -or $null -ne $s.refName) {
+                    $hasRepoScope = $true
+                    break
+                }
+            }
+            if (-not $hasRepoScope) {
+                try {
+                    $policyPutUrl = "https://$ADOServerFQDN/$collection/$projectNameEnc/_apis/policy/configurations/$($policy.id)?api-version=6.0"
+                    Invoke-RestMethod $policyPutUrl -Method Delete -Headers $headers
+                } catch {
+                    $TextBoxResult.AppendText("`r`n$($timeStamp) Failed to delete policy $($policy.id): $_`r`n")
+                }
             }
         }
         $TextBoxResult.AppendText("`r`n")
@@ -1678,8 +1740,7 @@ if ($null -ne $Form) {
         @{ctrl=$ButtonDisableSelfApproval; col=7; row=1},
         @{ctrl=$LabelRepos; col=0; row=2},
         @{ctrl=$LabelSelectedRepos; col=1; row=2},
-        @{ctrl=$ButtonSelectRepos; col=2; row=2},
-        @{ctrl=$TextBoxSelectedReposSelf; col=5; row=2}
+        @{ctrl=$ButtonSelectRepos; col=2; row=2}
     )
     foreach ($entry in $tableAdds) {
         $c = $entry.ctrl
@@ -1690,7 +1751,6 @@ if ($null -ne $Form) {
     }
     # Ensure the ComboBox span is set after adding
     try { $TopTable.SetColumnSpan($ComboBoxProject,1) } catch { }
-    try { $TopTable.SetColumnSpan($TextBoxSelectedReposSelf,3) } catch { }
     # Adjust LabelSelfApproval to sit above the QuerySelfApproval button and center its text
     try {
         if ($null -ne $LabelSelfApproval) {
@@ -1761,10 +1821,11 @@ if ($null -ne $Form) {
     $MiddlePanel.Location = New-Object System.Drawing.Point -ArgumentList 10, $middleY
     try { $mpWidth = $Form.ClientSize.Width - 40 } catch { $mpWidth = 1200 }
     $MiddlePanel.Size = New-Object System.Drawing.Size([Math]::Max(600,$mpWidth),220)
-    $MiddlePanel.ColumnCount = 1
+    $MiddlePanel.ColumnCount = 2
     $MiddlePanel.RowCount = 3
     $MiddlePanel.ColumnStyles.Clear()
     $MiddlePanel.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, 100)))
+    $MiddlePanel.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Absolute, 500)))
     $MiddlePanel.RowStyles.Clear()
     $MiddlePanel.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::AutoSize)))
     $MiddlePanel.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::AutoSize)))
@@ -1829,6 +1890,14 @@ if ($null -ne $Form) {
     $MiddlePanel.Controls.Add($projectPolicyPanel, 0, 0)
     $MiddlePanel.Controls.Add($repoPolicyPanel, 0, 1)
     $MiddlePanel.Controls.Add($defaultPanel, 0, 2)
+
+    if ($null -ne $TextBoxSelectedReposSelf) {
+        try { if ($null -ne $TextBoxSelectedReposSelf.Parent) { $TextBoxSelectedReposSelf.Parent.Controls.Remove($TextBoxSelectedReposSelf) } } catch { }
+        $TextBoxSelectedReposSelf.Dock = 'Fill'
+        $TextBoxSelectedReposSelf.Margin = New-Object System.Windows.Forms.Padding(8)
+        $MiddlePanel.Controls.Add($TextBoxSelectedReposSelf, 1, 0)
+        try { $MiddlePanel.SetRowSpan($TextBoxSelectedReposSelf, 3) } catch { }
+    }
 
     $Form.Controls.Add($MiddlePanel)
     $MiddlePanel.BringToFront()
