@@ -76,6 +76,10 @@ $ComboBoxProject.Size = New-Object System.Drawing.Size(300,24)
 $ComboBoxProject.DropDownStyle = 'DropDownList'
 $ComboBoxProject.Enabled = $false
 
+$script:RepoListCache = @()
+$script:SelectedRepoIds = @()
+$script:SelectedRepoNames = @()
+
 $ComboBoxProject.BringToFront()
 
 ###===================================================================================================
@@ -125,6 +129,24 @@ $LabelDisplayProject.Location = New-Object System.Drawing.Point(20,100)
 $LabelDisplayProject.Size = New-Object System.Drawing.Size(100,20)
 $LabelDisplayProject.Text = ''
 
+$LabelRepos = New-Object System.Windows.Forms.Label
+$LabelRepos.Location = New-Object System.Drawing.Point(20,120)
+$LabelRepos.Size = New-Object System.Drawing.Size(100,20)
+$LabelRepos.Text = 'Selected repos:'
+
+$LabelSelectedRepos = New-Object System.Windows.Forms.Label
+$LabelSelectedRepos.Location = New-Object System.Drawing.Point(130,120)
+$LabelSelectedRepos.Size = New-Object System.Drawing.Size(420,20)
+$LabelSelectedRepos.Text = 'All'
+$LabelSelectedRepos.AutoEllipsis = $true
+
+$ButtonSelectRepos = New-Object System.Windows.Forms.Button
+$ButtonSelectRepos.Location = New-Object System.Drawing.Point(560,116)
+$ButtonSelectRepos.Size = New-Object System.Drawing.Size(120,28)
+$ButtonSelectRepos.Text = 'Select Repos'
+$ButtonSelectRepos.Enabled = $false
+$ButtonSelectRepos.Add_Click({ showRepoSelector })
+
 # (moved into `$TopTable`) $LabelDisplayProject will be added to the top layout panel later
 ###===================================================================================================
 ##Define Form Dropdown Menu
@@ -166,6 +188,140 @@ function loadProjects {
     } catch {
         $TextBoxResult.AppendText("Failed to load projects: $_`r`n")
     }
+}
+
+function updateSelectedReposDisplay {
+    if ($null -eq $LabelSelectedRepos) { return }
+    if ($null -eq $script:SelectedRepoNames -or $script:SelectedRepoNames.Count -eq 0) {
+        $LabelSelectedRepos.Text = 'All'
+        return
+    }
+    if ($script:SelectedRepoNames.Count -le 3) {
+        $LabelSelectedRepos.Text = ($script:SelectedRepoNames -join ', ')
+    } else {
+        $LabelSelectedRepos.Text = "$($script:SelectedRepoNames.Count) selected"
+    }
+}
+
+function loadReposForProject {
+    $script:RepoListCache = @()
+    $script:SelectedRepoIds = @()
+    $script:SelectedRepoNames = @()
+    updateSelectedReposDisplay
+
+    if ([string]::IsNullOrWhiteSpace($ComboBoxProject.Text)) { return }
+    if ([string]::IsNullOrWhiteSpace($ADOServerFQDN) -or [string]::IsNullOrWhiteSpace($collection)) { return }
+
+    try {
+        $projectName = $ComboBoxProject.Text.ToString()
+        $projectNameEnc = [uri]::EscapeDataString($projectName)
+        $reposUrl = "https://$ADOServerFQDN/$collection/$projectNameEnc/_apis/git/repositories?api-version=6.0"
+        $reposResponse = Invoke-RestMethod -Method Get -Uri $reposUrl -Headers $headers
+        if ($null -ne $reposResponse -and $null -ne $reposResponse.value) {
+            $script:RepoListCache = @($reposResponse.value | Sort-Object -Property name)
+        }
+    } catch {
+        $TextBoxResult.AppendText("Failed to load repos: $_`r`n")
+    }
+}
+
+function getTargetRepos {
+    param(
+        [Parameter(Mandatory=$true)]
+        $Repos
+    )
+    if ($null -ne $script:SelectedRepoIds -and $script:SelectedRepoIds.Count -gt 0) {
+        return @($Repos | Where-Object { $script:SelectedRepoIds -contains $_.id })
+    }
+    return @($Repos)
+}
+
+function showRepoSelector {
+    if ($null -eq $ComboBoxProject -or [string]::IsNullOrWhiteSpace($ComboBoxProject.Text)) {
+        [System.Windows.Forms.MessageBox]::Show("Please select a project first.","Repo Selection")
+        return
+    }
+
+    if ($null -eq $script:RepoListCache -or $script:RepoListCache.Count -eq 0) {
+        loadReposForProject
+    }
+
+    if ($null -eq $script:RepoListCache -or $script:RepoListCache.Count -eq 0) {
+        [System.Windows.Forms.MessageBox]::Show("No repos found for the selected project.","Repo Selection")
+        return
+    }
+
+    $repoForm = New-Object System.Windows.Forms.Form
+    $repoForm.Text = "Select Repos"
+    $repoForm.StartPosition = 'CenterParent'
+    $repoForm.ClientSize = New-Object System.Drawing.Size(520,480)
+    $repoForm.Font = New-Object System.Drawing.Font('Segoe UI',9)
+
+    $listBox = New-Object System.Windows.Forms.ListBox
+    $listBox.Location = New-Object System.Drawing.Point(10,10)
+    $listBox.Size = New-Object System.Drawing.Size(500,380)
+    $listBox.SelectionMode = [System.Windows.Forms.SelectionMode]::MultiExtended
+    $listBox.DisplayMember = 'name'
+
+    foreach ($repo in $script:RepoListCache) {
+        [void]$listBox.Items.Add($repo)
+    }
+
+    for ($i = 0; $i -lt $listBox.Items.Count; $i++) {
+        $item = $listBox.Items[$i]
+        if ($null -ne $item -and ($script:SelectedRepoIds -contains $item.id)) {
+            $listBox.SetSelected($i, $true)
+        }
+    }
+
+    $buttonSelectAll = New-Object System.Windows.Forms.Button
+    $buttonSelectAll.Text = 'Select All'
+    $buttonSelectAll.Location = New-Object System.Drawing.Point(10,400)
+    $buttonSelectAll.Size = New-Object System.Drawing.Size(100,30)
+    $buttonSelectAll.Add_Click({
+        for ($i = 0; $i -lt $listBox.Items.Count; $i++) { $listBox.SetSelected($i, $true) }
+    })
+
+    $buttonClear = New-Object System.Windows.Forms.Button
+    $buttonClear.Text = 'Clear'
+    $buttonClear.Location = New-Object System.Drawing.Point(120,400)
+    $buttonClear.Size = New-Object System.Drawing.Size(100,30)
+    $buttonClear.Add_Click({ $listBox.ClearSelected() })
+
+    $buttonOk = New-Object System.Windows.Forms.Button
+    $buttonOk.Text = 'OK'
+    $buttonOk.Location = New-Object System.Drawing.Point(320,400)
+    $buttonOk.Size = New-Object System.Drawing.Size(90,30)
+    $buttonOk.Add_Click({
+        $script:SelectedRepoIds = @()
+        $script:SelectedRepoNames = @()
+        foreach ($item in $listBox.SelectedItems) {
+            if ($null -ne $item) {
+                $script:SelectedRepoIds += $item.id
+                $script:SelectedRepoNames += $item.name
+            }
+        }
+        updateSelectedReposDisplay
+        $repoForm.DialogResult = [System.Windows.Forms.DialogResult]::OK
+        $repoForm.Close()
+    })
+
+    $buttonCancel = New-Object System.Windows.Forms.Button
+    $buttonCancel.Text = 'Cancel'
+    $buttonCancel.Location = New-Object System.Drawing.Point(420,400)
+    $buttonCancel.Size = New-Object System.Drawing.Size(90,30)
+    $buttonCancel.Add_Click({
+        $repoForm.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
+        $repoForm.Close()
+    })
+
+    $repoForm.Controls.Add($listBox)
+    $repoForm.Controls.Add($buttonSelectAll)
+    $repoForm.Controls.Add($buttonClear)
+    $repoForm.Controls.Add($buttonOk)
+    $repoForm.Controls.Add($buttonCancel)
+
+    [void]$repoForm.ShowDialog($Form)
 }
 
 ##---------------------------------------------------------------------------------------------------
@@ -369,9 +525,11 @@ function queryAllRepo {
     $reposUrl = "https://$ADOServerFQDN/$collection/$projectNameEnc/_apis/git/repositories?api-version=6.0"
     $reposResponse = Invoke-RestMethod -Method Get -Uri $reposUrl -Headers $headers
 
+    $targetRepos = getTargetRepos -Repos $reposResponse.value
+
     $TextBoxResult.Text = "$($timeStamp) The default branch of each repository:"
 
-    foreach ($repo in $reposResponse.value) {
+    foreach ($repo in $targetRepos) {
         $timeStamp = (Get-Date).toString("yyyy/MM/dd HH:mm:ss")
         $TextBoxResult.AppendText("`r`n")
         $TextBoxResult.Appendtext("$($timestamp) Project: $($projectName), Repository: $($repo.name), ID: $($repo.id), Default Branch: $($repo.defaultBranch)")
@@ -410,9 +568,11 @@ function setDefaultBranch {
     $reposUrl = "https://$ADOServerFQDN/$collection/$projectNameEnc/_apis/git/repositories?api-version=6.0"
     $reposResponse = Invoke-RestMethod -Method Get -Uri $reposUrl -Headers $headers
 
+    $targetRepos = getTargetRepos -Repos $reposResponse.value
+
     $TextBoxResult.Text = "$($timeStamp) Setting default branch to $($toBranch.ToUpper()) of each repos:"
 
-    foreach ($repo in $reposResponse.value) {
+    foreach ($repo in $targetRepos) {
         $timeStamp = (Get-Date).toString("yyyy/MM/dd HH:mm:ss")
         $TextBoxResult.AppendText("`r`n")
         $TextBoxResult.AppendText("$($timeStamp) Setting default branch to $($toBranch.ToUpper()) of repository $($repo.name):")
@@ -724,13 +884,15 @@ function queryReposPolicy {
     $reposUrl = "https://$ADOServerFQDN/$collection/$projectNameEnc/_apis/git/repositories?api-version=6.0"
     $reposResponse = Invoke-RestMethod -Method Get -Uri $reposUrl -Headers $headers
     $repoMap = @{}
-    foreach ($repo in $reposResponse.value) {
+    $targetRepos = getTargetRepos -Repos $reposResponse.value
+    foreach ($repo in $targetRepos) {
         $repoMap[$repo.id] = $repo.name
     }
 
     $policiesUrl = "https://$ADOServerFQDN/$collection/$projectNameEnc/_apis/policy/configurations?api-version=6.0"
     $policiesResponse = Invoke-RestMethod -Method Get -Uri $policiesUrl -Headers $headers
 
+    $hasSelection = ($null -ne $script:SelectedRepoIds -and $script:SelectedRepoIds.Count -gt 0)
     foreach ($policy in $policiesResponse.value) {
         # settings.scope can be a single object or an array; repo-level policies include repositoryId and refName
         $scopes = @()
@@ -747,6 +909,9 @@ function queryReposPolicy {
         }
 
         if ($null -ne $matchedScope) {
+            if ($hasSelection -and (-not ($script:SelectedRepoIds -contains $matchedScope.repositoryId))) {
+                continue
+            }
             $policyRepo = $repoMap[$matchedScope.repositoryId]
             if ([string]::IsNullOrWhiteSpace($policyRepo)) { $policyRepo = $matchedScope.repositoryId }
 
@@ -821,8 +986,12 @@ function disableReposPolicy {
     $policiesUrl = "https://$ADOServerFQDN/$collection/$projectNameEnc/_apis/policy/configurations?api-version=6.0"
     $policiesResponse = Invoke-RestMethod -Method Get -Uri $policiesUrl -Headers $headers
 
+    $hasSelection = ($null -ne $script:SelectedRepoIds -and $script:SelectedRepoIds.Count -gt 0)
     foreach ($policy in $policiesResponse.value) {
         if ($null -ne $policy.settings.scope.repositoryId -And $null -ne $policy.settings.scope.refName) {
+            if ($hasSelection -and (-not ($script:SelectedRepoIds -contains $policy.settings.scope.repositoryId))) {
+                continue
+            }
             $policiesPutUrl = "https://$ADOServerFQDN/DevOpsCollection/$projectNameEnc/_apis/policy/configurations/$($policy.id)?api-version=6.0"
             $policyJson = $policy | ConvertTo-Json -Depth 10
             $policyObject = ConvertFrom-Json -InputObject $policyJson
@@ -905,8 +1074,12 @@ function enableReposPolicy {
     $policiesUrl = "https://$ADOServerFQDN/$collection/$projectNameEnc/_apis/policy/configurations?api-version=6.0"
     $policiesResponse = Invoke-RestMethod -Method Get -Uri $policiesUrl -Headers $headers
 
+    $hasSelection = ($null -ne $script:SelectedRepoIds -and $script:SelectedRepoIds.Count -gt 0)
     foreach ($policy in $policiesResponse.value) {
         if ($null -ne $policy.settings.scope.repositoryId -And $null -ne $policy.settings.scope.refName) {
+            if ($hasSelection -and (-not ($script:SelectedRepoIds -contains $policy.settings.scope.repositoryId))) {
+                continue
+            }
                     $policiesPutUrl = "https://$ADOServerFQDN/DevOpsCollection/$projectNameEnc/_apis/policy/configurations/$($policy.id)?api-version=6.0"
             $policyJson = $policy | ConvertTo-Json -Depth 10
             $policyObject = ConvertFrom-Json -InputObject $policyJson
@@ -991,8 +1164,12 @@ function deleteReposPolicy {
         $policiesUrl = "https://$ADOServerFQDN/$collection/$projectNameEnc/_apis/policy/configurations?api-version=6.0"
         $policiesResponse = Invoke-RestMethod -Method Get -Uri $policiesUrl -Headers $headers
 
+        $hasSelection = ($null -ne $script:SelectedRepoIds -and $script:SelectedRepoIds.Count -gt 0)
         foreach ($policy in $policiesResponse.value) {
             if ($null -ne $policy.settings.scope.repositoryId -And $null -ne $policy.settings.scope.refName) {
+                if ($hasSelection -and (-not ($script:SelectedRepoIds -contains $policy.settings.scope.repositoryId))) {
+                    continue
+                }
                 $policyPutUrl = "https://$ADOServerFQDN/$collection/$projectNameEnc/_apis/policy/configurations/$($policy.id)?api-version=6.0"
                 #$policyPutResponse = Invoke-RestMethod $policyPutUrl -Method Delete -Headers $headers -ContentType "application/json" -Body $jsonData
                 Invoke-RestMethod $policyPutUrl -Method Delete -Headers $headers -ContentType "application/json" -Body $jsonData
@@ -1038,8 +1215,12 @@ function querySelfApproval {
     $policiesUrl = "https://$ADOServerFQDN/$collection/$projectNameEnc/_apis/policy/configurations?api-version=6.0"
     $policiesResponse = Invoke-RestMethod -Method Get -Uri $policiesUrl -Headers $headers
 
+    $hasSelection = ($null -ne $script:SelectedRepoIds -and $script:SelectedRepoIds.Count -gt 0)
     foreach ($policy in $policiesResponse.value) {
         if ($policy.Type.id -eq "fa4e907d-c16b-4a4c-9dfa-4906e5d171dd") {
+            if ($hasSelection -and (-not ($script:SelectedRepoIds -contains $policy.settings.scope.repositoryId))) {
+                continue
+            }
             $policyGetResponse = Invoke-RestMethod -Method Get -Uri $policiesUrl -Headers $headers
             foreach ($repo in $reposResponse.value) {
                 if ($repo.id -eq $policy.settings.scope.repositoryId) {
@@ -1115,8 +1296,12 @@ function enableSelfApproval {
     $policiesUrl = "https://$ADOServerFQDN/$collection/$projectNameEnc/_apis/policy/configurations?api-version=6.0"
     $policiesResponse = Invoke-RestMethod -Method Get -Uri $policiesUrl -Headers $headers
 
+    $hasSelection = ($null -ne $script:SelectedRepoIds -and $script:SelectedRepoIds.Count -gt 0)
     foreach ($policy in $policiesResponse.value) {
         if ($policy.Type.id -eq "fa4e907d-c16b-4a4c-9dfa-4906e5d171dd") {
+            if ($hasSelection -and (-not ($script:SelectedRepoIds -contains $policy.settings.scope.repositoryId))) {
+                continue
+            }
             $policiesPutUrl = "https://$ADOServerFQDN/DevOpsCollection/$projectNameEnc/_apis/policy/configurations/$($policy.id)?api-version=6.0"
             $policyJson = $policy | ConvertTo-Json -Depth 10
             $policyObject = ConvertFrom-Json -InputObject $policyJson
@@ -1206,8 +1391,12 @@ function disableSelfApproval {
     $policiesUrl = "https://$ADOServerFQDN/$collection/$projectNameEnc/_apis/policy/configurations?api-version=6.0"
     $policiesResponse = Invoke-RestMethod -Method Get -Uri $policiesUrl -Headers $headers
 
+    $hasSelection = ($null -ne $script:SelectedRepoIds -and $script:SelectedRepoIds.Count -gt 0)
     foreach ($policy in $policiesResponse.value) {
        if ($policy.Type.id -eq "fa4e907d-c16b-4a4c-9dfa-4906e5d171dd") {
+            if ($hasSelection -and (-not ($script:SelectedRepoIds -contains $policy.settings.scope.repositoryId))) {
+                continue
+            }
             $policiesPutUrl = "https://$ADOServerFQDN/DevOpsCollection/$projectNameEnc/_apis/policy/configurations/$($policy.id)?api-version=6.0"
             $policyJson = $policy | ConvertTo-Json -Depth 10
             $policyObject = ConvertFrom-Json -InputObject $policyJson
@@ -1278,6 +1467,7 @@ function disableSelfApproval {
 #Enable/Disbaled Button until project name is inputed
 $ComboBoxProject.Add_SelectedIndexChanged({
     if ($ComboBoxProject.SelectedIndex -ne -1) {
+        $ButtonSelectRepos.Enabled = $true
         $ButtonQueryRepos.Enabled = $true
         $ButtonQueryProjectPolicy.Enabled = $true
         $ButtonDisableProjectPolicy.Enabled = $true
@@ -1294,12 +1484,14 @@ $ComboBoxProject.Add_SelectedIndexChanged({
         $LabelDisplayProject.Text = $ComboBoxProject.Text
         $LabelDisplayProject.BackColor = "Black"
         $LabelDisplayProject.ForeColor = "White"
+        loadReposForProject
         if ($ObjBoxBranch.Selectedindex -ne -1) {
             $ButtonSetDefaultBranch.Enabled = $true
         } else {
             $ButtonSetDefaultBranch.Enabled = $false
         }
     } else {
+        $ButtonSelectRepos.Enabled = $false
         $ButtonSetDefaultBranch.Enabled = $false
         $ButtonQueryRepos.Enabled = $false
         $ButtonQueryProjectPolicy.Enabled = $false
@@ -1317,6 +1509,10 @@ $ComboBoxProject.Add_SelectedIndexChanged({
         $LabelDisplayProject.Text = ""
         $LabelDisplayProject.BackColor = ""
         $LabelDisplayProject.ForeColor = ""
+        $script:SelectedRepoIds = @()
+        $script:SelectedRepoNames = @()
+        $script:RepoListCache = @()
+        updateSelectedReposDisplay
     }
 })
 
@@ -1410,7 +1606,7 @@ if ($null -ne $Form) {
     # Create a TableLayoutPanel for the top controls for predictable column alignment
     $TopTable = New-Object System.Windows.Forms.TableLayoutPanel
     $TopTable.ColumnCount = 8
-    $TopTable.RowCount = 2
+    $TopTable.RowCount = 3
     # Define column widths (percent)
     # Configure column styles: reserve an absolute wide column for the Project combo so its MinimumSize is respected
     $TopTable.ColumnStyles.Clear()
@@ -1426,10 +1622,11 @@ if ($null -ne $Form) {
     $TopTable.RowStyles.Clear()
     $TopTable.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Absolute, 48)))
     $TopTable.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Absolute, 48)))
+    $TopTable.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Absolute, 48)))
     $TopTable.Location = New-Object System.Drawing.Point(10,10)
     # Make table full width of the form (with small padding)
     try { $tableWidth = $Form.ClientSize.Width - 40 } catch { $tableWidth = 1200 }
-    $TopTable.Size = New-Object System.Drawing.Size([Math]::Max(700,$tableWidth),120)
+    $TopTable.Size = New-Object System.Drawing.Size([Math]::Max(700,$tableWidth),168)
     $TopTable.Dock = 'Top'
     $TopTable.Padding = New-Object System.Windows.Forms.Padding(6)
 
@@ -1447,6 +1644,9 @@ if ($null -ne $Form) {
     $Form.Controls.Remove($ButtonQuerySelfApproval) | Out-Null
     $Form.Controls.Remove($ButtonEnableSelfApproval) | Out-Null
     $Form.Controls.Remove($ButtonDisableSelfApproval) | Out-Null
+    $Form.Controls.Remove($LabelRepos) | Out-Null
+    $Form.Controls.Remove($LabelSelectedRepos) | Out-Null
+    $Form.Controls.Remove($ButtonSelectRepos) | Out-Null
 
     # Add controls into table cells (col,row) — ensure each control is removed from any previous parent first
     $tableAdds = @(
@@ -1463,7 +1663,10 @@ if ($null -ne $Form) {
         @{ctrl=$LabelSelfApproval; col=5; row=0},
         @{ctrl=$ButtonQuerySelfApproval; col=5; row=1},
         @{ctrl=$ButtonEnableSelfApproval; col=6; row=1},
-        @{ctrl=$ButtonDisableSelfApproval; col=7; row=1}
+        @{ctrl=$ButtonDisableSelfApproval; col=7; row=1},
+        @{ctrl=$LabelRepos; col=0; row=2},
+        @{ctrl=$LabelSelectedRepos; col=1; row=2},
+        @{ctrl=$ButtonSelectRepos; col=2; row=2}
     )
     foreach ($entry in $tableAdds) {
         $c = $entry.ctrl
@@ -1506,6 +1709,11 @@ if ($null -ne $Form) {
     try { $ObjBoxBranch.MinimumSize = New-Object System.Drawing.Size(220,24) } catch { }
     try { $ObjBoxPolicyType.MinimumSize = New-Object System.Drawing.Size(200,24) } catch { }
     try { $LabelDisplayProject.MinimumSize = New-Object System.Drawing.Size(200,20) } catch { }
+    try {
+        $LabelSelectedRepos.AutoSize = $false
+        $LabelSelectedRepos.Dock = 'Fill'
+        $LabelSelectedRepos.MinimumSize = New-Object System.Drawing.Size(320,20)
+    } catch { }
 
     # Ensure the self-approval buttons occupy their table cells and are visible
     try { $ButtonQuerySelfApproval.Dock = 'Fill'; $ButtonQuerySelfApproval.MinimumSize = New-Object System.Drawing.Size(140,36); $ButtonQuerySelfApproval.Visible = $true } catch { }
