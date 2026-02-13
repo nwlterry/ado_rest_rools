@@ -140,6 +140,13 @@ $LabelSelectedRepos.Size = New-Object System.Drawing.Size(420,20)
 $LabelSelectedRepos.Text = 'All'
 $LabelSelectedRepos.AutoEllipsis = $true
 
+$TextBoxSelectedReposSelf = New-Object System.Windows.Forms.TextBox
+$TextBoxSelectedReposSelf.Location = New-Object System.Drawing.Point(620,120)
+$TextBoxSelectedReposSelf.Size = New-Object System.Drawing.Size(320,22)
+$TextBoxSelectedReposSelf.Text = 'All'
+$TextBoxSelectedReposSelf.ReadOnly = $true
+$TextBoxSelectedReposSelf.BorderStyle = 'FixedSingle'
+
 $ButtonSelectRepos = New-Object System.Windows.Forms.Button
 $ButtonSelectRepos.Location = New-Object System.Drawing.Point(560,116)
 $ButtonSelectRepos.Size = New-Object System.Drawing.Size(120,28)
@@ -194,12 +201,15 @@ function updateSelectedReposDisplay {
     if ($null -eq $LabelSelectedRepos) { return }
     if ($null -eq $script:SelectedRepoNames -or $script:SelectedRepoNames.Count -eq 0) {
         $LabelSelectedRepos.Text = 'All'
+        if ($null -ne $TextBoxSelectedReposSelf) { $TextBoxSelectedReposSelf.Text = 'All' }
         return
     }
     if ($script:SelectedRepoNames.Count -le 3) {
         $LabelSelectedRepos.Text = ($script:SelectedRepoNames -join ', ')
+        if ($null -ne $TextBoxSelectedReposSelf) { $TextBoxSelectedReposSelf.Text = ($script:SelectedRepoNames -join ', ') }
     } else {
         $LabelSelectedRepos.Text = "$($script:SelectedRepoNames.Count) selected"
+        if ($null -ne $TextBoxSelectedReposSelf) { $TextBoxSelectedReposSelf.Text = "$($script:SelectedRepoNames.Count) selected" }
     }
 }
 
@@ -1647,6 +1657,7 @@ if ($null -ne $Form) {
     $Form.Controls.Remove($LabelRepos) | Out-Null
     $Form.Controls.Remove($LabelSelectedRepos) | Out-Null
     $Form.Controls.Remove($ButtonSelectRepos) | Out-Null
+    $Form.Controls.Remove($TextBoxSelectedReposSelf) | Out-Null
 
     # Add controls into table cells (col,row) — ensure each control is removed from any previous parent first
     $tableAdds = @(
@@ -1666,7 +1677,8 @@ if ($null -ne $Form) {
         @{ctrl=$ButtonDisableSelfApproval; col=7; row=1},
         @{ctrl=$LabelRepos; col=0; row=2},
         @{ctrl=$LabelSelectedRepos; col=1; row=2},
-        @{ctrl=$ButtonSelectRepos; col=2; row=2}
+        @{ctrl=$ButtonSelectRepos; col=2; row=2},
+        @{ctrl=$TextBoxSelectedReposSelf; col=5; row=2}
     )
     foreach ($entry in $tableAdds) {
         $c = $entry.ctrl
@@ -1677,6 +1689,7 @@ if ($null -ne $Form) {
     }
     # Ensure the ComboBox span is set after adding
     try { $TopTable.SetColumnSpan($ComboBoxProject,1) } catch { }
+    try { $TopTable.SetColumnSpan($TextBoxSelectedReposSelf,3) } catch { }
     # Adjust LabelSelfApproval to sit above the QuerySelfApproval button and center its text
     try {
         if ($null -ne $LabelSelfApproval) {
@@ -1709,6 +1722,11 @@ if ($null -ne $Form) {
     try { $ObjBoxBranch.MinimumSize = New-Object System.Drawing.Size(220,24) } catch { }
     try { $ObjBoxPolicyType.MinimumSize = New-Object System.Drawing.Size(200,24) } catch { }
     try { $LabelDisplayProject.MinimumSize = New-Object System.Drawing.Size(200,20) } catch { }
+    try {
+        $TextBoxSelectedReposSelf.Dock = 'Fill'
+        $TextBoxSelectedReposSelf.MinimumSize = New-Object System.Drawing.Size(240,22)
+        $TextBoxSelectedReposSelf.BackColor = [System.Drawing.SystemColors]::Window
+    } catch { }
     try {
         $LabelSelectedRepos.AutoSize = $false
         $LabelSelectedRepos.Dock = 'Fill'
