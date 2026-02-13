@@ -142,10 +142,14 @@ $LabelSelectedRepos.AutoEllipsis = $true
 
 $TextBoxSelectedReposSelf = New-Object System.Windows.Forms.TextBox
 $TextBoxSelectedReposSelf.Location = New-Object System.Drawing.Point(620,120)
-$TextBoxSelectedReposSelf.Size = New-Object System.Drawing.Size(320,22)
+$TextBoxSelectedReposSelf.Size = New-Object System.Drawing.Size(320,40)
 $TextBoxSelectedReposSelf.Text = 'All'
 $TextBoxSelectedReposSelf.ReadOnly = $true
 $TextBoxSelectedReposSelf.BorderStyle = 'FixedSingle'
+$TextBoxSelectedReposSelf.BackColor = 'Black'
+$TextBoxSelectedReposSelf.ForeColor = 'White'
+$TextBoxSelectedReposSelf.Multiline = $true
+$TextBoxSelectedReposSelf.ScrollBars = 'Vertical'
 
 $ButtonSelectRepos = New-Object System.Windows.Forms.Button
 $ButtonSelectRepos.Location = New-Object System.Drawing.Point(560,116)
@@ -204,12 +208,9 @@ function updateSelectedReposDisplay {
         if ($null -ne $TextBoxSelectedReposSelf) { $TextBoxSelectedReposSelf.Text = 'All' }
         return
     }
-    if ($script:SelectedRepoNames.Count -le 3) {
-        $LabelSelectedRepos.Text = ($script:SelectedRepoNames -join ', ')
-        if ($null -ne $TextBoxSelectedReposSelf) { $TextBoxSelectedReposSelf.Text = ($script:SelectedRepoNames -join ', ') }
-    } else {
-        $LabelSelectedRepos.Text = "$($script:SelectedRepoNames.Count) selected"
-        if ($null -ne $TextBoxSelectedReposSelf) { $TextBoxSelectedReposSelf.Text = "$($script:SelectedRepoNames.Count) selected" }
+    $LabelSelectedRepos.Text = "$($script:SelectedRepoNames.Count) selected"
+    if ($null -ne $TextBoxSelectedReposSelf) {
+        $TextBoxSelectedReposSelf.Text = ($script:SelectedRepoNames -join "`r`n")
     }
 }
 
@@ -1724,8 +1725,9 @@ if ($null -ne $Form) {
     try { $LabelDisplayProject.MinimumSize = New-Object System.Drawing.Size(200,20) } catch { }
     try {
         $TextBoxSelectedReposSelf.Dock = 'Fill'
-        $TextBoxSelectedReposSelf.MinimumSize = New-Object System.Drawing.Size(240,22)
-        $TextBoxSelectedReposSelf.BackColor = [System.Drawing.SystemColors]::Window
+        $TextBoxSelectedReposSelf.MinimumSize = New-Object System.Drawing.Size(240,40)
+        $TextBoxSelectedReposSelf.BackColor = 'Black'
+        $TextBoxSelectedReposSelf.ForeColor = 'White'
     } catch { }
     try {
         $LabelSelectedRepos.AutoSize = $false
@@ -1747,7 +1749,7 @@ if ($null -ne $Form) {
     } catch { }
     try {
         $ObjBoxPolicyType.Dock = 'Fill'
-        $ObjBoxPolicyType.MinimumSize = New-Object System.Drawing.Size(200,24)
+        $ObjBoxPolicyType.MinimumSize = New-Object System.Drawing.Size(200,100)
     } catch { }
 
     $Form.Controls.Add($TopTable)
@@ -1755,7 +1757,7 @@ if ($null -ne $Form) {
 
     # Create a middle TableLayoutPanel with three rows (project policy, repo policy, default/exit)
     $MiddlePanel = New-Object System.Windows.Forms.TableLayoutPanel
-    $middleY = $TopTable.Location.Y + $TopTable.Height + 6
+    $middleY = $TopTable.Location.Y + $TopTable.Height - 20
     $MiddlePanel.Location = New-Object System.Drawing.Point -ArgumentList 10, $middleY
     try { $mpWidth = $Form.ClientSize.Width - 40 } catch { $mpWidth = 1200 }
     $MiddlePanel.Size = New-Object System.Drawing.Size([Math]::Max(600,$mpWidth),220)
@@ -1836,7 +1838,7 @@ if ($null -ne $Form) {
 
     # Add the results TextBox after panels so it's parented only once and anchors correctly
     try { $Form.Controls.Remove($TextBoxResult) } catch { }
-    $TextBoxResult.Location = New-Object System.Drawing.Point(20,($TopTable.Height + $MiddlePanel.Height + 24))
+    $TextBoxResult.Location = New-Object System.Drawing.Point(20,($TopTable.Height + $MiddlePanel.Height - 20 ))
 
     # Safely determine the form client size (some hosts may leave $Form or ClientSize as an array)
     $formClientSize = $null
@@ -1854,7 +1856,7 @@ if ($null -ne $Form) {
     $width = [int]$formClientSize.Width
     $height = [int]$formClientSize.Height
     $w = [Math]::Max(100, $width - 40)
-    $h = [Math]::Max(100, $height - ($TopTable.Height + $MiddlePanel.Height + 48))
+    $h = [Math]::Max(100, $height - ($TopTable.Height + $MiddlePanel.Height ))
 
     $TextBoxResult.Size = New-Object System.Drawing.Size($w, $h)
     $TextBoxResult.Anchor = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Bottom -bor [System.Windows.Forms.AnchorStyles]::Left -bor [System.Windows.Forms.AnchorStyles]::Right
