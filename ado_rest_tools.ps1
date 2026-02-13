@@ -1527,34 +1527,80 @@ if ($null -ne $Form) {
     $Form.Controls.Add($TopTable)
     $TopTable.BringToFront()
 
-    # Create a middle FlowLayoutPanel for the main action buttons (keeps them organized and wraps)
-    $MiddlePanel = New-Object System.Windows.Forms.FlowLayoutPanel
+    # Create a middle TableLayoutPanel with three rows (project policy, repo policy, default/exit)
+    $MiddlePanel = New-Object System.Windows.Forms.TableLayoutPanel
     $middleY = $TopTable.Location.Y + $TopTable.Height + 6
     $MiddlePanel.Location = New-Object System.Drawing.Point -ArgumentList 10, $middleY
     try { $mpWidth = $Form.ClientSize.Width - 40 } catch { $mpWidth = 1200 }
-    $MiddlePanel.Size = New-Object System.Drawing.Size([Math]::Max(600,$mpWidth),140)
-    $MiddlePanel.FlowDirection = 'LeftToRight'
-    $MiddlePanel.WrapContents = $true
-    $MiddlePanel.AutoSize = $false
+    $MiddlePanel.Size = New-Object System.Drawing.Size([Math]::Max(600,$mpWidth),220)
+    $MiddlePanel.ColumnCount = 1
+    $MiddlePanel.RowCount = 3
+    $MiddlePanel.ColumnStyles.Clear()
+    $MiddlePanel.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, 100)))
+    $MiddlePanel.RowStyles.Clear()
+    $MiddlePanel.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::AutoSize)))
+    $MiddlePanel.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::AutoSize)))
+    $MiddlePanel.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::AutoSize)))
     $MiddlePanel.Padding = New-Object System.Windows.Forms.Padding(6)
     $MiddlePanel.Anchor = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Left -bor [System.Windows.Forms.AnchorStyles]::Right
 
-    # Remove lower controls from the form and add into middle panel
-    $lowerControls = @(
-        $ButtonQueryRepos, $ButtonQueryReposPolicy, $ButtonDisableReposPolicy, $ButtonEnableReposPolicy, $ButtonDeleteReposPolicy,
-        $ButtonQueryProjectPolicy, $ButtonDisableProjectPolicy, $ButtonEnableProjectPolicy, $ButtonDeleteProjectPolicy,
-        $ButtonSetDefaultBranch, $ButtonExit
+    $projectPolicyPanel = New-Object System.Windows.Forms.FlowLayoutPanel
+    $projectPolicyPanel.FlowDirection = 'LeftToRight'
+    $projectPolicyPanel.WrapContents = $true
+    $projectPolicyPanel.AutoSize = $true
+    $projectPolicyPanel.AutoSizeMode = [System.Windows.Forms.AutoSizeMode]::GrowAndShrink
+    $projectPolicyPanel.Dock = 'Fill'
+    $projectPolicyPanel.Padding = New-Object System.Windows.Forms.Padding(0)
+
+    $repoPolicyPanel = New-Object System.Windows.Forms.FlowLayoutPanel
+    $repoPolicyPanel.FlowDirection = 'LeftToRight'
+    $repoPolicyPanel.WrapContents = $true
+    $repoPolicyPanel.AutoSize = $true
+    $repoPolicyPanel.AutoSizeMode = [System.Windows.Forms.AutoSizeMode]::GrowAndShrink
+    $repoPolicyPanel.Dock = 'Fill'
+    $repoPolicyPanel.Padding = New-Object System.Windows.Forms.Padding(0)
+
+    $defaultPanel = New-Object System.Windows.Forms.FlowLayoutPanel
+    $defaultPanel.FlowDirection = 'LeftToRight'
+    $defaultPanel.WrapContents = $true
+    $defaultPanel.AutoSize = $true
+    $defaultPanel.AutoSizeMode = [System.Windows.Forms.AutoSizeMode]::GrowAndShrink
+    $defaultPanel.Dock = 'Fill'
+    $defaultPanel.Padding = New-Object System.Windows.Forms.Padding(0)
+
+    $projectPolicyControls = @(
+        $ButtonQueryProjectPolicy, $ButtonEnableProjectPolicy, $ButtonDisableProjectPolicy, $ButtonDeleteProjectPolicy
     )
-    foreach ($lc in $lowerControls) {
-        if ($null -ne $lc) {
-            try { $Form.Controls.Remove($lc) } catch { }
-            try { if ($null -ne $lc.Parent) { $lc.Parent.Controls.Remove($lc) } } catch { }
-            $lc.Size = New-Object System.Drawing.Size(160,40)
-            try { $lc.MinimumSize = New-Object System.Drawing.Size(140,40) } catch { }
-            $lc.Margin = New-Object System.Windows.Forms.Padding(8)
-            try { $MiddlePanel.Controls.Add($lc) | Out-Null } catch { }
+    $repoPolicyControls = @(
+        $ButtonQueryReposPolicy, $ButtonEnableReposPolicy, $ButtonDisableReposPolicy, $ButtonDeleteReposPolicy
+    )
+    $defaultControls = @(
+        $ButtonQueryRepos, $ButtonSetDefaultBranch, $ButtonExit
+    )
+
+    $rowPanels = @(
+        @{panel=$projectPolicyPanel; controls=$projectPolicyControls},
+        @{panel=$repoPolicyPanel; controls=$repoPolicyControls},
+        @{panel=$defaultPanel; controls=$defaultControls}
+    )
+
+    foreach ($row in $rowPanels) {
+        $panel = $row.panel
+        foreach ($lc in $row.controls) {
+            if ($null -ne $lc) {
+                try { $Form.Controls.Remove($lc) } catch { }
+                try { if ($null -ne $lc.Parent) { $lc.Parent.Controls.Remove($lc) } } catch { }
+                $lc.Size = New-Object System.Drawing.Size(160,40)
+                try { $lc.MinimumSize = New-Object System.Drawing.Size(140,40) } catch { }
+                $lc.Margin = New-Object System.Windows.Forms.Padding(8)
+                try { $panel.Controls.Add($lc) | Out-Null } catch { }
+            }
         }
     }
+
+    $MiddlePanel.Controls.Add($projectPolicyPanel, 0, 0)
+    $MiddlePanel.Controls.Add($repoPolicyPanel, 0, 1)
+    $MiddlePanel.Controls.Add($defaultPanel, 0, 2)
 
     $Form.Controls.Add($MiddlePanel)
     $MiddlePanel.BringToFront()
