@@ -534,12 +534,19 @@ function queryAllRepo {
 
     $targetRepos = getTargetRepos -Repos $reposResponse.value
 
-    $TextBoxResult.Text = "$($timeStamp) The default branch of each repository:"
+    $TextBoxResult.Text = "$($timeStamp) Query default branch:"
+    $TextBoxResult.AppendText("`r`n")
+    $TextBoxResult.AppendText("$($timeStamp) Project: $($projectName)")
+    $TextBoxResult.AppendText("`n`n")
 
     foreach ($repo in $targetRepos) {
         $timeStamp = (Get-Date).toString("yyyy/MM/dd HH:mm:ss")
         $TextBoxResult.AppendText("`r`n")
-        $TextBoxResult.Appendtext("$($timestamp) Project: $($projectName), Repository: $($repo.name), ID: $($repo.id), Default Branch: $($repo.defaultBranch)")
+        $TextBoxResult.AppendText("$($timeStamp) Repository: $($repo.name)")
+        $TextBoxResult.AppendText("`r`n")
+        $TextBoxResult.AppendText("$($timeStamp) Repository ID: $($repo.id)")
+        $TextBoxResult.AppendText("`r`n")
+        $TextBoxResult.AppendText("$($timeStamp) Default Branch: $($repo.defaultBranch)")
     }
     [System.Windows.Forms.MessageBox]::Show("Query of default branch in all repositories`n of project $projectName completed","Process Result")
     [string[]]$logOutput = $TextBoxResult.Text
@@ -577,14 +584,21 @@ function setDefaultBranch {
 
     $targetRepos = getTargetRepos -Repos $reposResponse.value
 
-    $TextBoxResult.Text = "$($timeStamp) Setting default branch to $($toBranch.ToUpper()) of each repos:"
+    $TextBoxResult.Text = "$($timeStamp) Set default branch:"
+    $TextBoxResult.AppendText("`r`n")
+    $TextBoxResult.AppendText("$($timeStamp) Project: $($projectName)")
+    $TextBoxResult.AppendText("`r`n")
+    $TextBoxResult.AppendText("$($timeStamp) Target Branch: $($toBranch.ToUpper())")
+    $TextBoxResult.AppendText("`n`n")
 
     foreach ($repo in $targetRepos) {
         $timeStamp = (Get-Date).toString("yyyy/MM/dd HH:mm:ss")
         $TextBoxResult.AppendText("`r`n")
-        $TextBoxResult.AppendText("$($timeStamp) Setting default branch to $($toBranch.ToUpper()) of repository $($repo.name):")
+        $TextBoxResult.AppendText("$($timeStamp) Repository: $($repo.name)")
         $TextBoxResult.AppendText("`r`n")
-        $TextBoxResult.AppendText("$($timeStamp) Project: $($projectName), Repository: $($repo.name), ID: $($repo.id), Default Branch: $($repo.defaultBranch)")
+        $TextBoxResult.AppendText("$($timeStamp) Repository ID: $($repo.id)")
+        $TextBoxResult.AppendText("`r`n")
+        $TextBoxResult.AppendText("$($timeStamp) Current Default Branch: $($repo.defaultBranch)")
         $branchUrl = "https://$ADOServerFQDN/$collection/$projectNameEnc/_apis/git/repositories/$($repo.id)?api-version=6.0"
         $TextBoxResult.AppendText("`r`n")
         $TextBoxResult.AppendText("$($timeStamp) Setting the default branch......")
@@ -592,7 +606,7 @@ function setDefaultBranch {
         Invoke-RestMethod -Uri $branchUrl -Method Patch -Headers $headers -ContentType "application/json" -Body ($jsonData | ConvertTo-Json)
         $branchRESTGet = Invoke-RestMethod -Uri $branchUrl -Method Get -Headers $headers
         $TextBoxResult.AppendText("`r`n")
-        $TextBoxResult.AppendText("$($timeStamp) Project: $($projectName), Repository: $($repo.name), ID: $($repo.id), Default Branch: $($branchRESTGet.defaultBranch)")
+        $TextBoxResult.AppendText("$($timeStamp) Updated Default Branch: $($branchRESTGet.defaultBranch)")
         [System.Windows.Forms.MessageBox]::Show("Setting default branch in repository`n $($repo.name) of project $projectName completed","Process Result")
     }
 
