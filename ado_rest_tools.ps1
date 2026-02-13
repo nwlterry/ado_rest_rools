@@ -241,6 +241,24 @@ function getTargetRepos {
     return @($Repos)
 }
 
+function getSelectedPolicyTypeIds {
+    $selected = $ObjBoxPolicyType.SelectedItem
+    if ($null -eq $selected -or [string]::IsNullOrWhiteSpace($selected) -or $selected -eq 'All') {
+        return @()
+    }
+
+    $policyTypeMap = @{
+        'Minimum number of reviewers' = 'fa4e907d-c16b-4a4c-9dfa-4906e5d171dd'
+        'Required reviewers' = 'fd2167ab-b0be-447a-8ec8-39368250530e'
+    }
+
+    if ($policyTypeMap.ContainsKey($selected)) {
+        return @($policyTypeMap[$selected])
+    }
+
+    return @()
+}
+
 function showRepoSelector {
     if ($null -eq $ComboBoxProject -or [string]::IsNullOrWhiteSpace($ComboBoxProject.Text)) {
         [System.Windows.Forms.MessageBox]::Show("Please select a project first.","Repo Selection")
@@ -345,8 +363,10 @@ $ObjBoxPolicyType.Size = New-Object System.Drawing.Size(160,40)
 $ObjBoxPolicyType.Enabled = $false
 
 #Define Project Type Dropdown menu value
+$ObjBoxPolicyType.Items.Add('All') | Out-Null
 $ObjBoxPolicyType.Items.Add('Minimum number of reviewers') | Out-Null
-$ObjBoxPolicyType.Items.Add('Main') | Out-Null
+$ObjBoxPolicyType.Items.Add('Required reviewers') | Out-Null
+try { $ObjBoxPolicyType.SelectedIndex = 0 } catch { }
 
 # (moved into `$TopTable`) $ObjBoxPolicyType will be added to the top layout panel later
 ###===================================================================================================
@@ -452,7 +472,7 @@ $ButtonDisableReposPolicy.Add_Click( { disableReposPolicy } )
 $ButtonEnableReposPolicy = New-Object System.Windows.Forms.Button
 $ButtonEnableReposPolicy.Location = New-Object System.Drawing.Point(380,140)
 $ButtonEnableReposPolicy.Size = New-Object System.Drawing.Size(100,40)
-$ButtonEnableReposPolicy.Text = "Enable Project Policy"
+$ButtonEnableReposPolicy.Text = "Enable Repos Policy"
 $ButtonEnableReposPolicy.Enabled = $false
 $ButtonEnableReposPolicy.Add_Click( { enableReposPolicy } )
 
@@ -726,7 +746,13 @@ function disableProjectPolicy {
         return
     }
 
+    $selectedPolicyTypeIds = getSelectedPolicyTypeIds
+    $hasPolicyFilter = ($selectedPolicyTypeIds.Count -gt 0)
+
     foreach ($policy in $policiesResponse.value) {
+        if ($hasPolicyFilter -and ($selectedPolicyTypeIds -notcontains $policy.Type.id)) {
+            continue
+        }
         $scopes = @()
         if ($null -ne $policy.settings -and $null -ne $policy.settings.scope) {
             $scopes = @($policy.settings.scope)
@@ -815,7 +841,13 @@ function enableProjectPolicy {
         return
     }
 
+    $selectedPolicyTypeIds = getSelectedPolicyTypeIds
+    $hasPolicyFilter = ($selectedPolicyTypeIds.Count -gt 0)
+
     foreach ($policy in $policiesResponse.value) {
+        if ($hasPolicyFilter -and ($selectedPolicyTypeIds -notcontains $policy.Type.id)) {
+            continue
+        }
         $scopes = @()
         if ($null -ne $policy.settings -and $null -ne $policy.settings.scope) {
             $scopes = @($policy.settings.scope)
@@ -906,7 +938,13 @@ function deleteProjectPolicy {
             return
         }
 
+        $selectedPolicyTypeIds = getSelectedPolicyTypeIds
+        $hasPolicyFilter = ($selectedPolicyTypeIds.Count -gt 0)
+
         foreach ($policy in $policiesResponse.value) {
+            if ($hasPolicyFilter -and ($selectedPolicyTypeIds -notcontains $policy.Type.id)) {
+                continue
+            }
             $scopes = @()
             if ($null -ne $policy.settings -and $null -ne $policy.settings.scope) {
                 $scopes = @($policy.settings.scope)
@@ -1070,8 +1108,13 @@ function disableReposPolicy {
     $policiesResponse = Invoke-RestMethod -Method Get -Uri $policiesUrl -Headers $headers
 
     $hasSelection = ($null -ne $script:SelectedRepoIds -and $script:SelectedRepoIds.Count -gt 0)
+    $selectedPolicyTypeIds = getSelectedPolicyTypeIds
+    $hasPolicyFilter = ($selectedPolicyTypeIds.Count -gt 0)
     foreach ($policy in $policiesResponse.value) {
         if ($null -ne $policy.settings.scope.repositoryId -And $null -ne $policy.settings.scope.refName) {
+            if ($hasPolicyFilter -and ($selectedPolicyTypeIds -notcontains $policy.Type.id)) {
+                continue
+            }
             if ($hasSelection -and (-not ($script:SelectedRepoIds -contains $policy.settings.scope.repositoryId))) {
                 continue
             }
@@ -1158,8 +1201,13 @@ function enableReposPolicy {
     $policiesResponse = Invoke-RestMethod -Method Get -Uri $policiesUrl -Headers $headers
 
     $hasSelection = ($null -ne $script:SelectedRepoIds -and $script:SelectedRepoIds.Count -gt 0)
+    $selectedPolicyTypeIds = getSelectedPolicyTypeIds
+    $hasPolicyFilter = ($selectedPolicyTypeIds.Count -gt 0)
     foreach ($policy in $policiesResponse.value) {
         if ($null -ne $policy.settings.scope.repositoryId -And $null -ne $policy.settings.scope.refName) {
+            if ($hasPolicyFilter -and ($selectedPolicyTypeIds -notcontains $policy.Type.id)) {
+                continue
+            }
             if ($hasSelection -and (-not ($script:SelectedRepoIds -contains $policy.settings.scope.repositoryId))) {
                 continue
             }
@@ -1248,8 +1296,13 @@ function deleteReposPolicy {
         $policiesResponse = Invoke-RestMethod -Method Get -Uri $policiesUrl -Headers $headers
 
         $hasSelection = ($null -ne $script:SelectedRepoIds -and $script:SelectedRepoIds.Count -gt 0)
+        $selectedPolicyTypeIds = getSelectedPolicyTypeIds
+        $hasPolicyFilter = ($selectedPolicyTypeIds.Count -gt 0)
         foreach ($policy in $policiesResponse.value) {
             if ($null -ne $policy.settings.scope.repositoryId -And $null -ne $policy.settings.scope.refName) {
+                if ($hasPolicyFilter -and ($selectedPolicyTypeIds -notcontains $policy.Type.id)) {
+                    continue
+                }
                 if ($hasSelection -and (-not ($script:SelectedRepoIds -contains $policy.settings.scope.repositoryId))) {
                     continue
                 }
@@ -1564,6 +1617,8 @@ $ComboBoxProject.Add_SelectedIndexChanged({
         $ButtonEnableSelfApproval.Enabled = $true
         $ButtonDisableSelfApproval.Enabled = $true
         $ObjBoxBranch.Enabled = $true
+        $ObjBoxPolicyType.Enabled = $true
+        $LabelObjBoxPolicyType.Enabled = $true
         loadReposForProject
         if ($ObjBoxBranch.Selectedindex -ne -1) {
             $ButtonSetDefaultBranch.Enabled = $true
@@ -1586,6 +1641,8 @@ $ComboBoxProject.Add_SelectedIndexChanged({
         $ButtonEnableSelfApproval.Enabled = $false
         $ButtonDisableSelfApproval.Enabled = $false
         $ObjBoxBranch.Enabled = $false
+        $ObjBoxPolicyType.Enabled = $false
+        $LabelObjBoxPolicyType.Enabled = $false
         $script:SelectedRepoIds = @()
         $script:SelectedRepoNames = @()
         $script:RepoListCache = @()
