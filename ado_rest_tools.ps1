@@ -102,14 +102,11 @@ $null = $null # Defer adding the result TextBox until after layout so it's only 
 ###===================================================================================================
 ##Define Form Label
 ##---------------------------------------------------------------------------------------------------
-#Define Project Input Text Box Label
 $LabelTextBoxProject = New-Object System.Windows.Forms.Label
 $LabelTextBoxProject.Location = New-Object System.Drawing.Point(20,20)
 $LabelTextBoxProject.Size = New-Object System.Drawing.Size(100,20)
 $LabelTextBoxProject.Text = 'Project name:'
 
-# (moved into `$TopTable`) $LabelTextBoxProject will be added to the top layout panel later
-#Define Project Input Text Box Label
 $LabelSelfApproval = New-Object System.Windows.Forms.Label
 $LabelSelfApproval.Location = New-Object System.Drawing.Point(500,30)
 $LabelSelfApproval.Size = New-Object System.Drawing.Size(100,40)
@@ -123,22 +120,19 @@ $LabelUsingProject.Size = New-Object System.Drawing.Size(100,20)
 $LabelUsingProject.Text = 'Using Project:'
 
 # (moved into `$TopTable`) $LabelUsingProject will be added to the top layout panel later
-#Define Display Project Label
-$LabelDisplayProject = New-Object System.Windows.Forms.Label
-$LabelDisplayProject.Location = New-Object System.Drawing.Point(20,100)
-$LabelDisplayProject.Size = New-Object System.Drawing.Size(100,20)
-$LabelDisplayProject.Text = ''
 
 $LabelRepos = New-Object System.Windows.Forms.Label
 $LabelRepos.Location = New-Object System.Drawing.Point(20,120)
 $LabelRepos.Size = New-Object System.Drawing.Size(100,20)
 $LabelRepos.Text = 'Selected repos:'
+$LabelRepos.Visible = $false
 
 $LabelSelectedRepos = New-Object System.Windows.Forms.Label
 $LabelSelectedRepos.Location = New-Object System.Drawing.Point(130,120)
 $LabelSelectedRepos.Size = New-Object System.Drawing.Size(420,20)
 $LabelSelectedRepos.Text = 'All'
 $LabelSelectedRepos.AutoEllipsis = $true
+$LabelSelectedRepos.Visible = $false
 
 $TextBoxSelectedReposSelf = New-Object System.Windows.Forms.TextBox
 $TextBoxSelectedReposSelf.Location = New-Object System.Drawing.Point(620,120)
@@ -158,21 +152,21 @@ $ButtonSelectRepos.Text = 'Select Repos'
 $ButtonSelectRepos.Enabled = $false
 $ButtonSelectRepos.Add_Click({ showRepoSelector })
 
-# (moved into `$TopTable`) $LabelDisplayProject will be added to the top layout panel later
+# (project display label removed)
 ###===================================================================================================
 ##Define Form Dropdown Menu
 ##---------------------------------------------------------------------------------------------------
 #Define Branch Dropdown menu label
 $LabelObjBoxBranch = New-Object System.Windows.Forms.Label
 $LabelObjBoxBranch.Location = New-Object System.Drawing.Point(20,100)
-$LabelObjBoxBranch.Size = New-Object System.Drawing.Size(100,20)
-$LabelObjBoxBranch.Text = 'Set default branch:'
+$LabelObjBoxBranch.Size = New-Object System.Drawing.Size(160,40)
+$LabelObjBoxBranch.Text = 'Select default branch:'
 
 # (moved into `$TopTable`) $LabelObjBoxBranch will be added to the top layout panel later
 #Define Branch Dropdown menu
 $ObjBoxBranch = New-Object System.Windows.Forms.ComboBox
 $ObjBoxBranch.Location = New-Object System.Drawing.Point(130,100)
-$ObjBoxBranch.Size = New-Object System.Drawing.Size(120,24)
+$ObjBoxBranch.Size = New-Object System.Drawing.Size(160,40)
 $ObjBoxBranch.Enabled = $false
 
 #Define Branch Dropdoen menu value
@@ -429,6 +423,7 @@ $ButtonDeleteProjectPolicy.Location = New-Object System.Drawing.Point(500,80)
 $ButtonDeleteProjectPolicy.Size = New-Object System.Drawing.Size(100,40)
 $ButtonDeleteProjectPolicy.Text = "Delete Project Policy"
 $ButtonDeleteProjectPolicy.Enabled = $false
+$ButtonDeleteProjectPolicy.Visible = $false
 $ButtonDeleteProjectPolicy.Add_Click( { deleteProjectPolicy } )
 
 # (moved into `$MiddlePanel`) $ButtonDeleteProjectPolicy will be added to the middle layout panel later
@@ -469,6 +464,7 @@ $ButtonDeleteReposPolicy.Location = New-Object System.Drawing.Point(500,140)
 $ButtonDeleteReposPolicy.Size = New-Object System.Drawing.Size(100,40)
 $ButtonDeleteReposPolicy.Text = "Delete Repos Policy"
 $ButtonDeleteReposPolicy.Enabled = $false
+$ButtonDeleteReposPolicy.Visible = $false
 $ButtonDeleteReposPolicy.Add_Click( { deleteReposPolicy } )
 
 # (moved into `$MiddlePanel`) $ButtonDeleteReposPolicy will be added to the middle layout panel later
@@ -1554,9 +1550,6 @@ $ComboBoxProject.Add_SelectedIndexChanged({
         $ButtonEnableSelfApproval.Enabled = $true
         $ButtonDisableSelfApproval.Enabled = $true
         $ObjBoxBranch.Enabled = $true
-        $LabelDisplayProject.Text = $ComboBoxProject.Text
-        $LabelDisplayProject.BackColor = "Black"
-        $LabelDisplayProject.ForeColor = "White"
         loadReposForProject
         if ($ObjBoxBranch.Selectedindex -ne -1) {
             $ButtonSetDefaultBranch.Enabled = $true
@@ -1579,9 +1572,6 @@ $ComboBoxProject.Add_SelectedIndexChanged({
         $ButtonEnableSelfApproval.Enabled = $false
         $ButtonDisableSelfApproval.Enabled = $false
         $ObjBoxBranch.Enabled = $false
-        $LabelDisplayProject.Text = ""
-        $LabelDisplayProject.BackColor = ""
-        $LabelDisplayProject.ForeColor = ""
         $script:SelectedRepoIds = @()
         $script:SelectedRepoNames = @()
         $script:RepoListCache = @()
@@ -1649,9 +1639,6 @@ if ($null -ne $ButtonRefreshProjects) {
 $LabelUsingProject.Location = New-Object System.Drawing.Point(20,60)
 $LabelUsingProject.Size = New-Object System.Drawing.Size(100,20)
 
-$LabelDisplayProject.Location = New-Object System.Drawing.Point(130,60)
-$LabelDisplayProject.Size = New-Object System.Drawing.Size(200,20)
-
 $LabelObjBoxBranch.Location = New-Object System.Drawing.Point(20,100)
 $LabelObjBoxBranch.Size = New-Object System.Drawing.Size(100,20)
 
@@ -1679,11 +1666,11 @@ if ($null -ne $Form) {
     # Create a TableLayoutPanel for the top controls for predictable column alignment
     $TopTable = New-Object System.Windows.Forms.TableLayoutPanel
     $TopTable.ColumnCount = 8
-    $TopTable.RowCount = 3
+    $TopTable.RowCount = 4
     # Define column widths (percent)
     # Configure column styles: reserve an absolute wide column for the Project combo so its MinimumSize is respected
     $TopTable.ColumnStyles.Clear()
-    $TopTable.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, 5)))
+    $TopTable.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Absolute, 120)))
     $TopTable.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Absolute, 360)))
     $TopTable.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Absolute, 130)))
     $TopTable.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, 10)))
@@ -1700,15 +1687,17 @@ if ($null -ne $Form) {
     # Make table full width of the form (with small padding)
     try { $tableWidth = $Form.ClientSize.Width - 40 } catch { $tableWidth = 1200 }
     $TopTable.Size = New-Object System.Drawing.Size([Math]::Max(700,$tableWidth),168)
-    $TopTable.Dock = 'Top'
+    $TopTable.Dock = 'None'
+    $TopTable.Anchor = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Left -bor [System.Windows.Forms.AnchorStyles]::Right
     $TopTable.Padding = New-Object System.Windows.Forms.Padding(6)
+    $TopTable.Margin = New-Object System.Windows.Forms.Padding(0)
 
     # Remove controls from form before reparenting
     $Form.Controls.Remove($LabelTextBoxProject) | Out-Null
     $Form.Controls.Remove($ComboBoxProject) | Out-Null
     $Form.Controls.Remove($ButtonRefreshProjects) | Out-Null
     $Form.Controls.Remove($LabelUsingProject) | Out-Null
-    $Form.Controls.Remove($LabelDisplayProject) | Out-Null
+    $Form.Controls.Remove($ButtonExit) | Out-Null
     $Form.Controls.Remove($LabelObjBoxBranch) | Out-Null
     $Form.Controls.Remove($ObjBoxBranch) | Out-Null
     $Form.Controls.Remove($LabelObjBoxPolicyType) | Out-Null
@@ -1728,19 +1717,15 @@ if ($null -ne $Form) {
         @{ctrl=$ComboBoxProject; col=1; row=0},
         @{ctrl=$ButtonRefreshProjects; col=2; row=0},
         @{ctrl=$LabelUsingProject; col=3; row=0},
-        @{ctrl=$LabelDisplayProject; col=4; row=0},
-        @{ctrl=$LabelObjBoxBranch; col=0; row=1},
-        @{ctrl=$ObjBoxBranch; col=1; row=1},
-        @{ctrl=$LabelObjBoxPolicyType; col=2; row=1},
-        @{ctrl=$ObjBoxPolicyType; col=3; row=1},
+        @{ctrl=$ButtonSelectRepos; col=0; row=1},
+        @{ctrl=$LabelObjBoxPolicyType; col=0; row=2},
+        @{ctrl=$ObjBoxPolicyType; col=1; row=2},
         # Move LabelSelfApproval to the top row above the QuerySelfApproval button (col 5, row 0)
         @{ctrl=$LabelSelfApproval; col=5; row=0},
+        @{ctrl=$ButtonExit; col=7; row=0},
         @{ctrl=$ButtonQuerySelfApproval; col=5; row=1},
         @{ctrl=$ButtonEnableSelfApproval; col=6; row=1},
-        @{ctrl=$ButtonDisableSelfApproval; col=7; row=1},
-        @{ctrl=$LabelRepos; col=0; row=2},
-        @{ctrl=$LabelSelectedRepos; col=1; row=2},
-        @{ctrl=$ButtonSelectRepos; col=2; row=2}
+        @{ctrl=$ButtonDisableSelfApproval; col=7; row=1}
     )
     foreach ($entry in $tableAdds) {
         $c = $entry.ctrl
@@ -1751,6 +1736,9 @@ if ($null -ne $Form) {
     }
     # Ensure the ComboBox span is set after adding
     try { $TopTable.SetColumnSpan($ComboBoxProject,1) } catch { }
+    try { $TopTable.SetColumnSpan($ButtonSelectRepos,3) } catch { }
+    try { $TopTable.SetColumnSpan($ObjBoxPolicyType,2) } catch { }
+    try { $ButtonSelectRepos.Dock = 'Fill' } catch { }
     # Adjust LabelSelfApproval to sit above the QuerySelfApproval button and center its text
     try {
         if ($null -ne $LabelSelfApproval) {
@@ -1763,7 +1751,7 @@ if ($null -ne $Form) {
 
     # Set common margins and sizes for table children and ensure combos fill their cells
     foreach ($ctrl in $TopTable.Controls) {
-        try { $ctrl.Margin = New-Object System.Windows.Forms.Padding(6) } catch { }
+        try { $ctrl.Margin = New-Object System.Windows.Forms.Padding(8) } catch { }
         if ($ctrl -is [System.Windows.Forms.Button]) {
             $ctrl.Size = New-Object System.Drawing.Size(160,36)
             try { $ctrl.MinimumSize = New-Object System.Drawing.Size(140,36) } catch { }
@@ -1780,9 +1768,8 @@ if ($null -ne $Form) {
 
     # Ensure specific controls have adequate minimum widths for display
     try { $ComboBoxProject.MinimumSize = New-Object System.Drawing.Size(300,24) } catch { }
-    try { $ObjBoxBranch.MinimumSize = New-Object System.Drawing.Size(220,24) } catch { }
-    try { $ObjBoxPolicyType.MinimumSize = New-Object System.Drawing.Size(200,24) } catch { }
-    try { $LabelDisplayProject.MinimumSize = New-Object System.Drawing.Size(200,20) } catch { }
+    try { $ObjBoxBranch.MinimumSize = New-Object System.Drawing.Size(160,40) } catch { }
+    try { $ObjBoxPolicyType.MinimumSize = New-Object System.Drawing.Size(200,40) } catch { }
     try {
         $TextBoxSelectedReposSelf.Dock = 'Fill'
         $TextBoxSelectedReposSelf.MinimumSize = New-Object System.Drawing.Size(240,40)
@@ -1804,12 +1791,13 @@ if ($null -ne $Form) {
     try {
         $LabelObjBoxPolicyType.AutoSize = $false
         $LabelObjBoxPolicyType.Dock = 'Fill'
-        $LabelObjBoxPolicyType.TextAlign = [System.Drawing.ContentAlignment]::MiddleRight
+        $LabelObjBoxPolicyType.TextAlign = [System.Drawing.ContentAlignment]::MiddleLeft
         $LabelObjBoxPolicyType.MinimumSize = New-Object System.Drawing.Size(100,24)
+        $LabelObjBoxPolicyType.AutoEllipsis = $true
     } catch { }
     try {
         $ObjBoxPolicyType.Dock = 'Fill'
-        $ObjBoxPolicyType.MinimumSize = New-Object System.Drawing.Size(200,100)
+        $ObjBoxPolicyType.MinimumSize = New-Object System.Drawing.Size(200,40)
     } catch { }
 
     $Form.Controls.Add($TopTable)
@@ -1858,13 +1846,13 @@ if ($null -ne $Form) {
     $defaultPanel.Padding = New-Object System.Windows.Forms.Padding(0)
 
     $projectPolicyControls = @(
-        $ButtonQueryProjectPolicy, $ButtonEnableProjectPolicy, $ButtonDisableProjectPolicy, $ButtonDeleteProjectPolicy
+        $ButtonQueryProjectPolicy, $ButtonEnableProjectPolicy, $ButtonDisableProjectPolicy
     )
     $repoPolicyControls = @(
-        $ButtonQueryReposPolicy, $ButtonEnableReposPolicy, $ButtonDisableReposPolicy, $ButtonDeleteReposPolicy
+        $ButtonQueryReposPolicy, $ButtonEnableReposPolicy, $ButtonDisableReposPolicy
     )
     $defaultControls = @(
-        $ButtonQueryRepos, $ButtonSetDefaultBranch, $ButtonExit
+        $ButtonQueryRepos, $LabelObjBoxBranch, $ObjBoxBranch, $ButtonSetDefaultBranch
     )
 
     $rowPanels = @(
@@ -1882,6 +1870,9 @@ if ($null -ne $Form) {
                 $lc.Size = New-Object System.Drawing.Size(160,40)
                 try { $lc.MinimumSize = New-Object System.Drawing.Size(140,40) } catch { }
                 $lc.Margin = New-Object System.Windows.Forms.Padding(8)
+                if ($lc -is [System.Windows.Forms.ComboBox]) {
+                    try { $lc.DropDownStyle = 'DropDownList' } catch { }
+                }
                 try { $panel.Controls.Add($lc) | Out-Null } catch { }
             }
         }
@@ -1907,7 +1898,7 @@ if ($null -ne $Form) {
 
     # Add the results TextBox after panels so it's parented only once and anchors correctly
     try { $Form.Controls.Remove($TextBoxResult) } catch { }
-    $TextBoxResult.Location = New-Object System.Drawing.Point(20,($TopTable.Height + $MiddlePanel.Height - 20 ))
+    $TextBoxResult.Location = New-Object System.Drawing.Point(10,($TopTable.Height + $MiddlePanel.Height + 6 ))
 
     # Safely determine the form client size (some hosts may leave $Form or ClientSize as an array)
     $formClientSize = $null
@@ -1925,7 +1916,7 @@ if ($null -ne $Form) {
     $width = [int]$formClientSize.Width
     $height = [int]$formClientSize.Height
     $w = [Math]::Max(100, $width - 40)
-    $h = [Math]::Max(100, $height - ($TopTable.Height + $MiddlePanel.Height ))
+    $h = [Math]::Max(100, $height - ($TopTable.Height + $MiddlePanel.Height + 6))
 
     $TextBoxResult.Size = New-Object System.Drawing.Size($w, $h)
     $TextBoxResult.Anchor = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Bottom -bor [System.Windows.Forms.AnchorStyles]::Left -bor [System.Windows.Forms.AnchorStyles]::Right
