@@ -320,6 +320,104 @@ function Backup-CurrentState {
 ###===================================================================================================
 ## REST helpers
 ###===================================================================================================
+# PowerShell ConvertTo-Json turns a one-item array into an object. Policy "scope"
+# must stay an array or the server rejects the update.
+$script:JsonArrayProperties = @("scope","requiredReviewerIds","optionalReviewerIds","filenamePatterns")
+
+function ConvertTo-PlainObject {
+    param($Value, [string]$PropertyName)
+    $forceArray = $PropertyName -and ($script:JsonArrayProperties -contains $PropertyName)
+    if ($forceArray) {
+        $arr = New-Object System.Collections.ArrayList
+        foreach ($item in @($Value)) {
+            if ($null -ne $item) { [void]$arr.Add((ConvertTo-PlainObject -Value $item)) }
+        }
+        return ,$arr.ToArray()
+    }
+    if ($null -eq $Value) { return $null }
+    if ($Value -is [string]) { return $Value }
+    if ($Value -is [datetime]) { return $Value.ToString("o") }
+    if ($Value -is [ValueType]) { return $Value }
+    if ($Value -is [PSCustomObject]) {
+        $h = New-Object System.Collections.Hashtable
+        foreach ($prop in $Value.PSObject.Properties) {
+            $h[$prop.Name] = ConvertTo-PlainObject -Value $prop.Value -PropertyName $prop.Name
+        }
+        return $h
+    }
+    if ($Value -is [System.Collections.IDictionary]) {
+        $h = New-Object System.Collections.Hashtable
+        foreach ($key in @($Value.Keys)) {
+            $h[[string]$key] = ConvertTo-PlainObject -Value $Value[$key] -PropertyName ([string]$key)
+        }
+        return $h
+    }
+    if ($Value -is [System.Collections.IEnumerable]) {
+        $arr = New-Object System.Collections.ArrayList
+        foreach ($item in @($Value)) {
+            if ($null -ne $item) { [void]$arr.Add((ConvertTo-PlainObject -Value $item)) }
+        }
+        return ,$arr.ToArray()
+    }
+    return [string]$Value
+}
+
+function ConvertTo-AdoJson {
+    param($Value)
+    $plain = ConvertTo-PlainObject -Value $Value
+    Add-Type -AssemblyName System.Web.Extensions -ErrorAction SilentlyContinue
+    $ser = New-Object System.Web.Script.Serialization.JavaScriptSerializer
+    $ser.MaxJsonLength = 67108864
+    $ser.RecursionLimit = 80
+    return $ser.Serialize($plain)
+}
+
+function Get-RestErrorBody {
+    param($ErrorRecord)
+    if ($ErrorRecord.ErrorDetails -and $ErrorRecord.ErrorDetails.Message) {
+        return [string]$ErrorRecord.ErrorDetails.Message
+    }
+    try {
+        $resp = $ErrorRecord.Exception.Response
+        if (-not $resp) { return $null }
+        $stream = $resp.GetResponseStream()
+        if (-not $stream) { return $null }
+        $reader = New-Object System.IO.StreamReader($stream)
+        $text = $reader.ReadToEnd()
+        $reader.Dispose()
+        return $text
+    } catch { return $null }
+}
+
+function Test-RealRepositoryId {
+    param($Id)
+    $text = [string]$Id
+    if ([string]::IsNullOrWhiteSpace($text)) { return $false }
+    return $text -ne "00000000-0000-0000-0000-000000000000"
+}
+
+function New-PolicyUpdateBody {
+    param(
+        $Policy,
+        [switch]$SetEnabled,
+        [bool]$Enabled = $true
+    )
+    $body = $Policy | ConvertTo-Json -Depth 30 | ConvertFrom-Json
+    if ($SetEnabled) { $body.isEnabled = [bool]$Enabled }
+    foreach ($prop in @("createdBy","createdDate","_links","isDeleted","isEnterpriseManaged","revision","id","url")) {
+        $body.PSObject.Properties.Remove($prop)
+    }
+    if ($body.type) {
+        $typeId = [string]$body.type.id
+        $body.PSObject.Properties.Remove("type")
+        $body | Add-Member -NotePropertyName type -NotePropertyValue ([pscustomobject]@{ id = $typeId }) -Force
+    }
+    if ($body.settings -and ($body.settings.PSObject.Properties.Name -contains "scope") -and $null -ne $body.settings.scope) {
+        $body.settings.scope = @($body.settings.scope)
+    }
+    return $body
+}
+
 function Invoke-AdoRest {
     param(
         [string]$Uri,
@@ -338,8 +436,8 @@ function Invoke-AdoRest {
     } else {
         $params.Headers = $script:Headers
     }
-    if ($Body) {
-        $params.Body = ($Body | ConvertTo-Json -Depth 10)
+    if ($null -ne $Body) {
+        $params.Body = ConvertTo-AdoJson -Value $Body
         $params.ContentType = "application/json"
     }
     try {
@@ -361,6 +459,12 @@ function Invoke-AdoRest {
             Write-Log "REST $Method failed: $Uri"
             if ($status) { Write-Log "HTTP Status: $status" }
             Write-Log "  $detail"
+            $errBody = Get-RestErrorBody $_
+            if ($errBody) {
+                $short = $errBody.Trim()
+                if ($short.Length -gt 500) { $short = $short.Substring(0, 500) }
+                Write-Log "  Server said: $short"
+            }
             if ($status -eq 401 -and $script:AuthMode -eq "PAT") {
                 Write-Log "Check the PAT (not expired, Code Read or Project and Team Read) and that Basic authentication is enabled in IIS."
             }
@@ -995,26 +1099,34 @@ function Invoke-PolicyOperation {
         Write-Log "Policy type filter: $typeFilter"
 
         $enc = [uri]::EscapeDataString($proj)
+        $policies = @($policies | Where-Object { $_ -ne $null })
+        $repoNames = @{}
+        foreach ($cached in @($script:RepoListCache)) {
+            if ($cached.id) { $repoNames[([string]$cached.id).ToLower()] = [string]$cached.name }
+        }
+        $selectedIds = @($script:SelectedRepoIds | ForEach-Object { ([string]$_).ToLower() })
         $matched = 0
+        $changed = 0
+        $failed = 0
+        $projectCount = 0
+        $repoCount = 0
         foreach ($p in $policies) {
             $scopes = @()
             if ($p.settings -and $p.settings.scope) { $scopes = @($p.settings.scope) }
-            $hasRepo = $false
+            $isRepoLevel = $false
             foreach ($s in $scopes) {
-                if ($s.repositoryId -or $s.refName) { $hasRepo = $true; break }
+                if (Test-RealRepositoryId $s.repositoryId) { $isRepoLevel = $true; break }
             }
-            $isProjectLevel = -not $hasRepo
-            if (($Scope -eq "Project" -and -not $isProjectLevel) -or ($Scope -eq "Repo" -and $isProjectLevel)) { continue }
+            if ($isRepoLevel) { $repoCount++ } else { $projectCount++ }
+            if (($Scope -eq "Project" -and $isRepoLevel) -or ($Scope -eq "Repo" -and -not $isRepoLevel)) { continue }
             $typeId = ""
             if ($p.type -and $p.type.id) { $typeId = ([string]$p.type.id).ToLower() }
             if ($filterId -and $typeId -ne $filterId.ToLower()) { continue }
-            if ($Scope -eq "Repo" -and $script:SelectedRepoIds.Count -gt 0) {
+            if ($Scope -eq "Repo" -and $selectedIds.Count -gt 0) {
                 $applies = $false
                 foreach ($s in $scopes) {
-                    if (-not $s.repositoryId -or ($script:SelectedRepoIds -contains [string]$s.repositoryId)) {
-                        $applies = $true
-                        break
-                    }
+                    $rid = ([string]$s.repositoryId).ToLower()
+                    if ($selectedIds -contains $rid) { $applies = $true; break }
                 }
                 if (-not $applies) { continue }
             }
@@ -1030,50 +1142,72 @@ function Invoke-PolicyOperation {
                     $scopeBits = @()
                     foreach ($s in $scopes) {
                         $ref = if ($s.refName) { $s.refName } else { "all branches" }
-                        $repo = if ($s.repositoryId) { $s.repositoryId } else { "all repositories" }
+                        if (Test-RealRepositoryId $s.repositoryId) {
+                            $rid = ([string]$s.repositoryId).ToLower()
+                            $repo = if ($repoNames.ContainsKey($rid)) { $repoNames[$rid] } else { $s.repositoryId }
+                        } else {
+                            $repo = "all repositories"
+                        }
                         $scopeBits += "$ref ($repo)"
                     }
-                    $scopeText = if ($scopeBits.Count -gt 0) { $scopeBits -join "; " } else { "project" }
+                    $scopeText = if ($scopeBits.Count -gt 0) { $scopeBits -join "; " } else { "whole project" }
                     Write-Log "  $typeName | Policy #$($p.id) | $onText | $blockText | $scopeText"
                 }
                 "Enable" {
-                    $body = $p | ConvertTo-Json -Depth 10 | ConvertFrom-Json
-                    $body.isEnabled = $true
-                    $body.isBlocking = $true
-                    # Clean read-only properties
-                    foreach ($prop in @("createdBy","createdDate","_links","isDeleted","isEnterpriseManaged","revision","id","url")) {
-                        $body.PSObject.Properties.Remove($prop)
+                    try {
+                        $body = New-PolicyUpdateBody -Policy $p -SetEnabled -Enabled $true
+                        $updated = Invoke-AdoRest -Uri $policyUrl -Method Put -Body $body
+                        $now = "saved"
+                        if ($null -ne $updated -and $null -ne $updated.isEnabled) {
+                            $now = if ($updated.isEnabled) { "On" } else { "Off" }
+                        }
+                        Write-Log "Turned on '$typeName' (policy #$($p.id)). Server now reports $now."
+                        $changed++
+                    } catch {
+                        $failed++
+                        Write-Log "Could not turn on '$typeName' (policy #$($p.id))."
                     }
-                    if ($body.type) {
-                        $body.type.PSObject.Properties.Remove("url")
-                        $body.type.PSObject.Properties.Remove("displayName")
-                    }
-                    Invoke-AdoRest -Uri $policyUrl -Method Put -Body $body | Out-Null
-                    Write-Log "Enabled '$typeName' (policy #$($p.id))."
                 }
                 "Disable" {
-                    $body = $p | ConvertTo-Json -Depth 10 | ConvertFrom-Json
-                    $body.isEnabled = $false
-                    foreach ($prop in @("createdBy","createdDate","_links","isDeleted","isEnterpriseManaged","revision","id","url")) {
-                        $body.PSObject.Properties.Remove($prop)
+                    try {
+                        $body = New-PolicyUpdateBody -Policy $p -SetEnabled -Enabled $false
+                        $updated = Invoke-AdoRest -Uri $policyUrl -Method Put -Body $body
+                        $now = "saved"
+                        if ($null -ne $updated -and $null -ne $updated.isEnabled) {
+                            $now = if ($updated.isEnabled) { "On" } else { "Off" }
+                        }
+                        Write-Log "Turned off '$typeName' (policy #$($p.id)). Server now reports $now."
+                        $changed++
+                    } catch {
+                        $failed++
+                        Write-Log "Could not turn off '$typeName' (policy #$($p.id))."
                     }
-                    if ($body.type) {
-                        $body.type.PSObject.Properties.Remove("url")
-                        $body.type.PSObject.Properties.Remove("displayName")
-                    }
-                    Invoke-AdoRest -Uri $policyUrl -Method Put -Body $body | Out-Null
-                    Write-Log "Disabled '$typeName' (policy #$($p.id))."
                 }
                 "Delete" {
-                    Invoke-AdoRest -Uri $policyUrl -Method Delete | Out-Null
-                    Write-Log "Deleted '$typeName' (policy #$($p.id))."
+                    try {
+                        Invoke-AdoRest -Uri $policyUrl -Method Delete | Out-Null
+                        Write-Log "Deleted '$typeName' (policy #$($p.id))."
+                        $changed++
+                    } catch {
+                        $failed++
+                        Write-Log "Could not delete '$typeName' (policy #$($p.id))."
+                    }
                 }
             }
         }
         if ($matched -eq 0) {
             Write-Log "No $Scope-level policies matched '$typeFilter'."
+            Write-Log "This project has $projectCount project-level and $repoCount repository-level policies."
+            if ($Scope -eq "Repo" -and $repoCount -eq 0 -and $projectCount -gt 0) {
+                Write-Log "Those policies apply to all repositories. Use the Project-Level buttons for them."
+            }
+            if ($Scope -eq "Project" -and $projectCount -eq 0 -and $repoCount -gt 0) {
+                Write-Log "Those policies are set on individual repositories. Use the Repository-Level buttons for them."
+            }
+        } elseif ($Action -eq "Query") {
+            Write-Log "Query finished. $matched $Scope-level policy/policies matched '$typeFilter'."
         } else {
-            Write-Log "$Action finished. $matched $Scope-level policy/policies matched '$typeFilter'."
+            Write-Log "$Action finished. Updated $changed, failed $failed, matched $matched."
         }
     } catch {
         Write-Log "$Action $Scope policies failed: $_"
@@ -1128,30 +1262,16 @@ function Invoke-SelfApprovalOperation {
                     Write-Log "              Blocks completion? $blockStatus"
                 }
                 "Enable" {
-                    $body = $p | ConvertTo-Json -Depth 10 | ConvertFrom-Json
-                    if (-not $body.settings) { $body.settings = [PSCustomObject]@{} }
-                    $body.settings.creatorVoteCounts = $true
-                    foreach ($prop in @("createdBy","createdDate","_links","isDeleted","isEnterpriseManaged","revision","id","url")) {
-                        $body.PSObject.Properties.Remove($prop)
-                    }
-                    if ($body.type) {
-                        $body.type.PSObject.Properties.Remove("url")
-                        $body.type.PSObject.Properties.Remove("displayName")
-                    }
+                    $body = New-PolicyUpdateBody -Policy $p
+                    if (-not $body.settings) { $body | Add-Member -NotePropertyName settings -NotePropertyValue ([pscustomobject]@{}) -Force }
+                    $body.settings | Add-Member -NotePropertyName creatorVoteCounts -NotePropertyValue $true -Force
                     Invoke-AdoRest -Uri $policyUrl -Method Put -Body $body | Out-Null
                     Write-Log "Policy #$($p.id): Self-approval is now allowed (PR creator vote counts toward the minimum)."
                 }
                 "Disable" {
-                    $body = $p | ConvertTo-Json -Depth 10 | ConvertFrom-Json
-                    if (-not $body.settings) { $body.settings = [PSCustomObject]@{} }
-                    $body.settings.creatorVoteCounts = $false
-                    foreach ($prop in @("createdBy","createdDate","_links","isDeleted","isEnterpriseManaged","revision","id","url")) {
-                        $body.PSObject.Properties.Remove($prop)
-                    }
-                    if ($body.type) {
-                        $body.type.PSObject.Properties.Remove("url")
-                        $body.type.PSObject.Properties.Remove("displayName")
-                    }
+                    $body = New-PolicyUpdateBody -Policy $p
+                    if (-not $body.settings) { $body | Add-Member -NotePropertyName settings -NotePropertyValue ([pscustomobject]@{}) -Force }
+                    $body.settings | Add-Member -NotePropertyName creatorVoteCounts -NotePropertyValue $false -Force
                     Invoke-AdoRest -Uri $policyUrl -Method Put -Body $body | Out-Null
                     Write-Log "Policy #$($p.id): Self-approval is now blocked (PR creator vote does not count)."
                 }
