@@ -57,7 +57,7 @@ $script:SelectedRepoNames = @()
 
 function Get-BaseUrl {
     $scheme = if ($script:UseHttps) { "https" } else { "http" }
-    return "$scheme://$($script:ADOServerFQDN)"
+    return ($scheme + "://" + $script:ADOServerFQDN)
 }
 
 function Update-Headers {
