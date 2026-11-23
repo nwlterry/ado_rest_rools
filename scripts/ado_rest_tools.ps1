@@ -56,42 +56,49 @@ $script:SkipSslValidation = $false
 $script:SslRetryUsed  = $false
 $script:Headers       = @{}
 
-# Azure DevOps Server requires TLS 1.2+. Windows PowerShell 5.1 does not enable it by default.
+# Azure DevOps Server requires TLS 1.2. Do not OR in TLS 1.3: on Windows PowerShell 5.1
+# that flag often breaks the handshake ("unexpected error occurred on a send").
 function Initialize-Tls {
-    try {
-        $names = [Enum]::GetNames([Net.SecurityProtocolType])
-        $flags = [Net.SecurityProtocolType]::Tls12
-        if ($names -contains "Tls13") {
-            $flags = $flags -bor [Net.SecurityProtocolType]::Tls13
-        }
-        [Net.ServicePointManager]::SecurityProtocol = $flags
-    } catch {
-        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-    }
-}
-
-function Enable-SkipSslValidation {
-    if ($script:SkipSslValidation) { return }
-    if (-not ("TrustAllCertsPolicy" -as [type])) {
+    if (-not ("AdoServerTls" -as [type])) {
         Add-Type @"
 using System.Net;
+using System.Net.Security;
 using System.Security.Cryptography.X509Certificates;
-public class TrustAllCertsPolicy : ICertificatePolicy {
-    public bool CheckValidationResult(ServicePoint sp, X509Certificate cert, WebRequest req, int problem) { return true; }
+public static class AdoServerTls {
+    public static bool AcceptAny(object sender, X509Certificate certificate, X509Chain chain, SslPolicyErrors errors) {
+        return true;
+    }
+    public static void EnableTls12() {
+        ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12;
+        ServicePointManager.Expect100Continue = false;
+    }
+    public static void TrustAll() {
+        ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12;
+        ServicePointManager.Expect100Continue = false;
+        ServicePointManager.ServerCertificateValidationCallback =
+            new RemoteCertificateValidationCallback(AcceptAny);
+    }
 }
 "@
     }
-    [System.Net.ServicePointManager]::CertificatePolicy = New-Object TrustAllCertsPolicy
-    try {
-        [System.Net.ServicePointManager]::ServerCertificateValidationCallback = { $true }
-    } catch {}
+    [AdoServerTls]::EnableTls12()
+}
+
+function Enable-SkipSslValidation {
+    Initialize-Tls
+    # A PowerShell scriptblock callback is collected or throws, which closes the
+    # connection with "An unexpected error occurred on a send". Use a static .NET method.
+    [AdoServerTls]::TrustAll()
     $script:SkipSslValidation = $true
+    $script:SslCallbackReady = $true
 }
 
 Initialize-Tls
 $script:RepoListCache = @()
 $script:SelectedRepoIds = @()
 $script:SelectedRepoNames = @()
+$script:ApiDetected = $false
+$script:SslCallbackReady = $false
 
 function Get-BaseUrl {
     $scheme = if ($script:UseHttps) { "https" } else { "http" }
@@ -109,6 +116,20 @@ function Update-Headers {
     $script:Headers = @{
         Authorization = "Basic $b64"
     }
+}
+
+function Get-ErrorDetail {
+    param($ErrorRecord)
+    $parts = New-Object System.Collections.Generic.List[string]
+    $ex = $ErrorRecord.Exception
+    $guard = 0
+    while ($null -ne $ex -and $guard -lt 6) {
+        $line = $ex.GetType().FullName + ": " + $ex.Message
+        if (-not $parts.Contains($line)) { [void]$parts.Add($line) }
+        $ex = $ex.InnerException
+        $guard++
+    }
+    return ($parts -join " | ")
 }
 
 function Write-Log {
@@ -172,8 +193,12 @@ function Load-Config {
     if ($null -ne $Config.SkipSslValidation) { $skipSsl = [bool]$Config.SkipSslValidation }
     elseif ($null -ne $Config.IgnoreSslErrors) { $skipSsl = [bool]$Config.IgnoreSslErrors }
     $script:SslRetryUsed = $false
+    $script:ApiDetected = $false
     if ($skipSsl) { Enable-SkipSslValidation }
-    else { $script:SkipSslValidation = $false }
+    else {
+        $script:SkipSslValidation = $false
+        try { [Net.ServicePointManager]::ServerCertificateValidationCallback = $null } catch {}
+    }
     $script:ApiVersion    = if ($Config.ApiVersion -and $Config.ApiVersion -ne "auto") { $Config.ApiVersion } else { "6.0" }
     Update-Headers
     $patStatus = if ([string]::IsNullOrWhiteSpace($script:MyPat)) { "MISSING" } else { "set (len=$($script:MyPat.Length))" }
@@ -191,25 +216,41 @@ function Load-Config {
 }
 
 function Detect-ApiVersion {
-    if ([string]::IsNullOrWhiteSpace($script:ADOServerFQDN) -or [string]::IsNullOrWhiteSpace($script:MyPat)) {
-        return "6.0"
-    }
+    if ([string]::IsNullOrWhiteSpace($script:ADOServerFQDN)) { return "6.0" }
+    if ($script:ApiDetected) { return $script:ApiVersion }
     $base = Get-BaseUrl
     $testVersions = @("7.2", "7.1", "7.0", "6.0")
     $firstUrl = $null
+    $connectionError = $null
     foreach ($ver in $testVersions) {
         $url = "$base/$($script:Collection)/_apis/projects?api-version=$ver&`$top=1"
         if (-not $firstUrl) { $firstUrl = $url }
         try {
-            $null = Invoke-AdoRest -Uri $url -Method Get
-            Write-Log "API version $ver is supported by the server."
+            $null = Invoke-AdoRest -Uri $url -Method Get -Quiet
+            Write-Log "The server accepts API version $ver."
+            $script:ApiVersion = $ver
+            $script:ApiDetected = $true
             return $ver
         } catch {
-            continue
+            $detail = Get-ErrorDetail $_
+            if ($detail -match "connection was closed|secure channel|trust relationship|unexpected error|timed out|Unable to connect|No such host|refused") {
+                $connectionError = $detail
+                break
+            }
         }
     }
-    Write-Log "Could not auto-detect API version. Falling back to 6.0 (compatible with Azure DevOps Server 2020)."
-    if ($firstUrl) { Write-Log "Tried URL: $firstUrl" }
+    $script:ApiDetected = $true
+    if ($connectionError) {
+        Write-Log "Cannot reach the server over HTTPS."
+        Write-Log "  $connectionError"
+        if ($firstUrl) { Write-Log "  URL tried: $firstUrl" }
+        if (-not $script:UrlPrefix) {
+            Write-Log "  If this server is installed under /tfs, set UrlPrefix to tfs and Collection to the real collection name."
+        }
+    } else {
+        Write-Log "Could not auto-detect API version. Using 6.0 (Azure DevOps Server 2020 and later)."
+        if ($firstUrl) { Write-Log "  URL tried: $firstUrl" }
+    }
     return "6.0"
 }
 
@@ -282,11 +323,13 @@ function Invoke-AdoRest {
     param(
         [string]$Uri,
         [string]$Method = "Get",
-        [object]$Body = $null
+        [object]$Body = $null,
+        [switch]$Quiet
     )
     $params = @{
         Uri         = $Uri
         Method      = $Method
+        TimeoutSec  = 20
         ErrorAction = "Stop"
     }
     if ($script:AuthMode -eq "Windows") {
@@ -301,26 +344,28 @@ function Invoke-AdoRest {
     try {
         return Invoke-RestMethod @params
     } catch {
-        $msg = $_.Exception.Message
-        $isSsl = $msg -match "trust relationship|SSL/TLS|secure channel"
-        if ($isSsl -and -not $script:SslRetryUsed) {
+        $detail = Get-ErrorDetail $_
+        $isTls = $detail -match "trust relationship|SSL/TLS|secure channel|unexpected error occurred on a send"
+        if ($isTls -and -not $script:SslCallbackReady) {
             $script:SslRetryUsed = $true
-            Write-Log "The server certificate is not trusted by this computer."
-            Write-Log "Retrying this session with certificate checks disabled."
-            Write-Log 'Add "SkipSslValidation": true to the config so this stays on next time.'
+            Write-Log "HTTPS handshake failed. Retrying with certificate checks disabled."
             Enable-SkipSslValidation
-            return Invoke-AdoRest -Uri $Uri -Method $Method -Body $Body
+            return Invoke-AdoRest -Uri $Uri -Method $Method -Body $Body -Quiet:$Quiet
         }
-        $status = $null
-        if ($_.Exception.Response) { $status = [int]$_.Exception.Response.StatusCode }
-        Write-Log "REST $Method failed: $Uri"
-        if ($status) { Write-Log "HTTP Status: $status" }
-        if ($isSsl) {
-            Write-Log "Still cannot trust the HTTPS certificate."
-            Write-Log "Install the internal CA into Trusted Root, or set SkipSslValidation to true."
-        }
-        if ($status -eq 401 -and $script:AuthMode -eq "PAT") {
-            Write-Log "Hint: On-prem Azure DevOps Server often requires Basic Auth to be enabled in IIS, or use AuthMode: Windows with a domain account."
+        if (-not $Quiet) {
+            $status = $null
+            if ($_.Exception.Response) {
+                try { $status = [int]$_.Exception.Response.StatusCode } catch {}
+            }
+            Write-Log "REST $Method failed: $Uri"
+            if ($status) { Write-Log "HTTP Status: $status" }
+            Write-Log "  $detail"
+            if ($status -eq 401 -and $script:AuthMode -eq "PAT") {
+                Write-Log "Check the PAT (not expired, Code Read or Project and Team Read) and that Basic authentication is enabled in IIS."
+            }
+            if ($isTls) {
+                Write-Log "Close this window and start the script again so the old certificate callback is cleared."
+            }
         }
         throw
     }
@@ -720,12 +765,13 @@ $ButtonRefreshProjects.Add_Click({
         $ObjBoxBranch.Enabled = $ComboBoxProject.Enabled
         Write-Log "Successfully retrieved $($projects.Count) project(s) from the collection."
     } catch {
-        $msg = $_.Exception.Message
+        $msg = Get-ErrorDetail $_
         if ($msg -match "401") {
             Write-Log "Authentication failed (401 Unauthorized) while loading projects."
-            Write-Log "Check: (1) PAT is correct and not expired, (2) PAT has Code (Read) or Project and Team (Read) scope, (3) server URL is reachable with HTTPS."
+            Write-Log "Check the PAT (not expired, Code Read or Project and Team Read) and that Basic authentication is enabled in IIS."
         } else {
-            Write-Log "Failed to retrieve projects: $msg"
+            Write-Log "Failed to retrieve projects."
+            Write-Log "  $msg"
         }
     }
 })
