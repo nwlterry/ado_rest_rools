@@ -194,6 +194,7 @@ function Load-Config {
     elseif ($null -ne $Config.IgnoreSslErrors) { $skipSsl = [bool]$Config.IgnoreSslErrors }
     $script:SslRetryUsed = $false
     $script:ApiDetected = $false
+    $script:PolicyTypesLoadedFromServer = $false
     if ($skipSsl) { Enable-SkipSslValidation }
     else {
         $script:SkipSslValidation = $false
@@ -393,6 +394,63 @@ function Get-Policies {
     return (Invoke-AdoRest -Uri $url).value
 }
 
+function Update-PolicyTypeCombo {
+    param([hashtable]$Map)
+    $current = [string]$ObjBoxPolicyType.SelectedItem
+    $ObjBoxPolicyType.Items.Clear()
+    $names = @("All") + @($Map.Keys | Where-Object { $_ -ne "All" } | Sort-Object)
+    foreach ($name in $names) {
+        if ($Map.ContainsKey($name)) { [void]$ObjBoxPolicyType.Items.Add($name) }
+    }
+    if ($ObjBoxPolicyType.Items.Contains($current)) {
+        $ObjBoxPolicyType.SelectedItem = $current
+    } elseif ($ObjBoxPolicyType.Items.Count -gt 0) {
+        $ObjBoxPolicyType.SelectedIndex = 0
+    }
+}
+
+function Refresh-PolicyTypesFromServer {
+    param([string]$ProjectName)
+    if ($script:PolicyTypesLoadedFromServer) { return }
+    if ([string]::IsNullOrWhiteSpace($ProjectName)) { return }
+    if ([string]::IsNullOrWhiteSpace($script:ADOServerFQDN)) { return }
+    try {
+        Ensure-ApiVersion
+        $enc = [uri]::EscapeDataString($ProjectName)
+        $url = "$(Get-BaseUrl)/$($script:Collection)/$enc/_apis/policy/types?api-version=$($script:ApiVersion)"
+        $resp = Invoke-AdoRest -Uri $url -Method Get -Quiet
+        $previousName = [string]$ObjBoxPolicyType.SelectedItem
+        $previousId = ""
+        if ($previousName -and $script:PolicyTypeMap.ContainsKey($previousName)) {
+            $previousId = [string]$script:PolicyTypeMap[$previousName]
+        }
+        $map = @{ "All" = "" }
+        foreach ($t in @($resp.value)) {
+            if (-not $t.id) { continue }
+            $name = if ($t.displayName) { [string]$t.displayName } else { [string]$t.id }
+            if ($map.ContainsKey($name)) { $name = "$name ($([string]$t.id))" }
+            $map[$name] = ([string]$t.id).ToLower()
+        }
+        if ($map.Count -gt 1) {
+            $script:PolicyTypeMap = $map
+            $script:PolicyTypesLoadedFromServer = $true
+            Update-PolicyTypeCombo -Map $map
+            if ($previousId) {
+                foreach ($key in @($map.Keys)) {
+                    if ($map[$key] -and ([string]$map[$key]).ToLower() -eq $previousId.ToLower()) {
+                        $ObjBoxPolicyType.SelectedItem = $key
+                        break
+                    }
+                }
+            }
+            Write-Log "Loaded $($map.Count - 1) policy type(s) from project '$ProjectName'."
+        }
+    } catch {
+        Write-Log "Could not load policy types from the server. Using the built-in list."
+        Write-Log "  $(Get-ErrorDetail $_)"
+    }
+}
+
 ###===================================================================================================
 ## UI
 ###===================================================================================================
@@ -535,9 +593,30 @@ $LabelPolicyType.Size = New-Object System.Drawing.Size(80, 22)
 
 $ObjBoxPolicyType = New-Object System.Windows.Forms.ComboBox
 $ObjBoxPolicyType.Location = New-Object System.Drawing.Point(95, 28)
-$ObjBoxPolicyType.Size = New-Object System.Drawing.Size(280, 24)
+$ObjBoxPolicyType.Size = New-Object System.Drawing.Size(520, 24)
+$ObjBoxPolicyType.DropDownWidth = 520
 $ObjBoxPolicyType.DropDownStyle = "DropDownList"
-@("All","Minimum number of reviewers","Required reviewers") | ForEach-Object { [void]$ObjBoxPolicyType.Items.Add($_) }
+$script:PolicyTypeMap = @{
+    "All"                            = ""
+    "Minimum number of reviewers"    = "fa4e907d-c16b-4a4c-9dfa-4906e5d171dd"
+    "Required reviewers"             = "fd2167ab-b0be-447a-8ec8-39368250530e"
+    "Comment requirements"           = "c6a1889d-b943-4856-b76f-9e46bb6b0df2"
+    "Work item linking"              = "40e92b44-2fe1-4dd6-b3d8-74a9c21d0c6e"
+    "Build validation"               = "0609b952-1397-4640-95ec-e00a01b2c241"
+    "Require a merge strategy"       = "fa4e907d-c16b-4a4c-9dfa-4916e5d171ab"
+    "Status checks"                  = "cbdc66da-9728-4af8-aada-9a5a32e4a226"
+}
+$script:PolicyTypesLoadedFromServer = $false
+@(
+    "All",
+    "Minimum number of reviewers",
+    "Required reviewers",
+    "Comment requirements",
+    "Work item linking",
+    "Build validation",
+    "Require a merge strategy",
+    "Status checks"
+) | ForEach-Object { [void]$ObjBoxPolicyType.Items.Add($_) }
 $ObjBoxPolicyType.SelectedIndex = 0
 
 $GroupFilter.Controls.AddRange(@($LabelPolicyType, $ObjBoxPolicyType))
@@ -829,6 +908,15 @@ function Get-TargetRepos {
     return @($Repos)
 }
 
+$ComboBoxProject.Add_SelectedIndexChanged({
+    if ([string]::IsNullOrWhiteSpace($ComboBoxProject.Text)) { return }
+    if ($script:PolicyTypeProject -ne $ComboBoxProject.Text) {
+        $script:PolicyTypesLoadedFromServer = $false
+        $script:PolicyTypeProject = $ComboBoxProject.Text
+        Refresh-PolicyTypesFromServer -ProjectName $ComboBoxProject.Text
+    }
+})
+
 $ButtonExit.Add_Click({ $Form.Close() })
 
 ###===================================================================================================
@@ -890,14 +978,24 @@ function Invoke-PolicyOperation {
 
     try {
         $policies = Get-Policies -ProjectName $proj
-        $typeFilter = $ObjBoxPolicyType.SelectedItem
-        $typeMap = @{
-            "Minimum number of reviewers" = "fa4e907d-c16b-4a4c-9dfa-4906e5d171dd"
-            "Required reviewers"          = "fd2167ab-b0be-447a-8ec8-39368250530e"
+        Refresh-PolicyTypesFromServer -ProjectName $proj
+        $typeFilter = [string]$ObjBoxPolicyType.SelectedItem
+        if ([string]::IsNullOrWhiteSpace($typeFilter)) { $typeFilter = "All" }
+        $filterId = ""
+        if ($typeFilter -ne "All" -and $script:PolicyTypeMap.ContainsKey($typeFilter)) {
+            $filterId = [string]$script:PolicyTypeMap[$typeFilter]
         }
-        $filterId = if ($typeMap.ContainsKey($typeFilter)) { $typeMap[$typeFilter] } else { $null }
+        if ($Scope -eq "Repo") {
+            if ($script:SelectedRepoNames.Count -gt 0) {
+                Write-Log "Repository filter: $($script:SelectedRepoNames -join ', ')"
+            } else {
+                Write-Log "Repository filter: all repositories"
+            }
+        }
+        Write-Log "Policy type filter: $typeFilter"
 
         $enc = [uri]::EscapeDataString($proj)
+        $matched = 0
         foreach ($p in $policies) {
             $scopes = @()
             if ($p.settings -and $p.settings.scope) { $scopes = @($p.settings.scope) }
@@ -907,13 +1005,36 @@ function Invoke-PolicyOperation {
             }
             $isProjectLevel = -not $hasRepo
             if (($Scope -eq "Project" -and -not $isProjectLevel) -or ($Scope -eq "Repo" -and $isProjectLevel)) { continue }
-            if ($filterId -and $p.type.id -ne $filterId) { continue }
+            $typeId = ""
+            if ($p.type -and $p.type.id) { $typeId = ([string]$p.type.id).ToLower() }
+            if ($filterId -and $typeId -ne $filterId.ToLower()) { continue }
+            if ($Scope -eq "Repo" -and $script:SelectedRepoIds.Count -gt 0) {
+                $applies = $false
+                foreach ($s in $scopes) {
+                    if (-not $s.repositoryId -or ($script:SelectedRepoIds -contains [string]$s.repositoryId)) {
+                        $applies = $true
+                        break
+                    }
+                }
+                if (-not $applies) { continue }
+            }
 
+            $matched++
             $policyUrl = "$(Get-BaseUrl)/$($script:Collection)/$enc/_apis/policy/configurations/$($p.id)?api-version=$($script:ApiVersion)"
+            $typeName = if ($p.type.displayName) { $p.type.displayName } else { $typeId }
 
             switch ($Action) {
                 "Query" {
-                    Write-Log "  Policy: $($p.type.displayName) | ID: $($p.id) | Enabled: $($p.isEnabled) | Blocking: $($p.isBlocking)"
+                    $onText = if ($p.isEnabled) { "On" } else { "Off" }
+                    $blockText = if ($p.isBlocking) { "blocks completion" } else { "advisory only" }
+                    $scopeBits = @()
+                    foreach ($s in $scopes) {
+                        $ref = if ($s.refName) { $s.refName } else { "all branches" }
+                        $repo = if ($s.repositoryId) { $s.repositoryId } else { "all repositories" }
+                        $scopeBits += "$ref ($repo)"
+                    }
+                    $scopeText = if ($scopeBits.Count -gt 0) { $scopeBits -join "; " } else { "project" }
+                    Write-Log "  $typeName | Policy #$($p.id) | $onText | $blockText | $scopeText"
                 }
                 "Enable" {
                     $body = $p | ConvertTo-Json -Depth 10 | ConvertFrom-Json
@@ -928,7 +1049,7 @@ function Invoke-PolicyOperation {
                         $body.type.PSObject.Properties.Remove("displayName")
                     }
                     Invoke-AdoRest -Uri $policyUrl -Method Put -Body $body | Out-Null
-                    Write-Log "Enabled policy '$($p.type.displayName)' (ID: $($p.id))."
+                    Write-Log "Enabled '$typeName' (policy #$($p.id))."
                 }
                 "Disable" {
                     $body = $p | ConvertTo-Json -Depth 10 | ConvertFrom-Json
@@ -941,15 +1062,19 @@ function Invoke-PolicyOperation {
                         $body.type.PSObject.Properties.Remove("displayName")
                     }
                     Invoke-AdoRest -Uri $policyUrl -Method Put -Body $body | Out-Null
-                    Write-Log "Disabled policy '$($p.type.displayName)' (ID: $($p.id))."
+                    Write-Log "Disabled '$typeName' (policy #$($p.id))."
                 }
                 "Delete" {
                     Invoke-AdoRest -Uri $policyUrl -Method Delete | Out-Null
-                    Write-Log "Deleted policy '$($p.type.displayName)' (ID: $($p.id))."
+                    Write-Log "Deleted '$typeName' (policy #$($p.id))."
                 }
             }
         }
-        Write-Log "$Action operation on $Scope-level policies completed."
+        if ($matched -eq 0) {
+            Write-Log "No $Scope-level policies matched '$typeFilter'."
+        } else {
+            Write-Log "$Action finished. $matched $Scope-level policy/policies matched '$typeFilter'."
+        }
     } catch {
         Write-Log "$Action $Scope policies failed: $_"
     }
