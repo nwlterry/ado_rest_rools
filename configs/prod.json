@@ -1,0 +1,9 @@
+{
+  "Name": "Production",
+  "ServerFQDN": "ado.yourdomain.com",
+  "Collection": "DevOpsCollection",
+  "PAT": "",
+  "ApiVersion": "auto",
+  "UseHttps": true,
+  "Notes": "Fill in ServerFQDN and PAT. Use 'auto' for API version detection."
+}

@@ -1,0 +1,9 @@
+{
+  "Name": "Development",
+  "ServerFQDN": "ado-dev.yourdomain.com",
+  "Collection": "DefaultCollection",
+  "PAT": "",
+  "ApiVersion": "7.2",
+  "UseHttps": true,
+  "Notes": "For Azure DevOps Server 25H2 / 20260506.1 or later."
+}
