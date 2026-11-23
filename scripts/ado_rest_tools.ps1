@@ -51,8 +51,44 @@ $script:MyPat         = ""
 $script:ApiVersion    = "6.0"
 $script:UseHttps      = $true
 $script:UrlPrefix     = ""
-$script:AuthMode      = "PAT"   # PAT or Windows
+$script:AuthMode      = "PAT"   # PAT, Basic, or Windows
+$script:SkipSslValidation = $false
+$script:SslRetryUsed  = $false
 $script:Headers       = @{}
+
+# Azure DevOps Server requires TLS 1.2+. Windows PowerShell 5.1 does not enable it by default.
+function Initialize-Tls {
+    try {
+        $names = [Enum]::GetNames([Net.SecurityProtocolType])
+        $flags = [Net.SecurityProtocolType]::Tls12
+        if ($names -contains "Tls13") {
+            $flags = $flags -bor [Net.SecurityProtocolType]::Tls13
+        }
+        [Net.ServicePointManager]::SecurityProtocol = $flags
+    } catch {
+        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    }
+}
+
+function Enable-SkipSslValidation {
+    if ($script:SkipSslValidation) { return }
+    if (-not ("TrustAllCertsPolicy" -as [type])) {
+        Add-Type @"
+using System.Net;
+using System.Security.Cryptography.X509Certificates;
+public class TrustAllCertsPolicy : ICertificatePolicy {
+    public bool CheckValidationResult(ServicePoint sp, X509Certificate cert, WebRequest req, int problem) { return true; }
+}
+"@
+    }
+    [System.Net.ServicePointManager]::CertificatePolicy = New-Object TrustAllCertsPolicy
+    try {
+        [System.Net.ServicePointManager]::ServerCertificateValidationCallback = { $true }
+    } catch {}
+    $script:SkipSslValidation = $true
+}
+
+Initialize-Tls
 $script:RepoListCache = @()
 $script:SelectedRepoIds = @()
 $script:SelectedRepoNames = @()
@@ -128,17 +164,29 @@ function Load-Config {
     $script:MyPat = if ($rawPat) { $rawPat.ToString().Trim() } else { "" }
     $script:UseHttps      = if ($null -ne $Config.UseHttps) { [bool]$Config.UseHttps } else { $true }
     $script:UrlPrefix     = if ($Config.UrlPrefix) { $Config.UrlPrefix.Trim().Trim('/') } else { "" }
-    $script:AuthMode      = if ($Config.AuthMode) { $Config.AuthMode } else { "PAT" }
+    $mode = if ($Config.AuthMode) { $Config.AuthMode.Trim() } else { "PAT" }
+    if ($mode -match '^(?i)(basic|pat)$') { $mode = "PAT" }
+    elseif ($mode -match '^(?i)windows$') { $mode = "Windows" }
+    $script:AuthMode = $mode
+    $skipSsl = $false
+    if ($null -ne $Config.SkipSslValidation) { $skipSsl = [bool]$Config.SkipSslValidation }
+    elseif ($null -ne $Config.IgnoreSslErrors) { $skipSsl = [bool]$Config.IgnoreSslErrors }
+    $script:SslRetryUsed = $false
+    if ($skipSsl) { Enable-SkipSslValidation }
+    else { $script:SkipSslValidation = $false }
     $script:ApiVersion    = if ($Config.ApiVersion -and $Config.ApiVersion -ne "auto") { $Config.ApiVersion } else { "6.0" }
     Update-Headers
     $patStatus = if ([string]::IsNullOrWhiteSpace($script:MyPat)) { "MISSING" } else { "set (len=$($script:MyPat.Length))" }
     $prefixLog = if ($script:UrlPrefix) { " | Prefix: $($script:UrlPrefix)" } else { "" }
+    $sslLog = if ($script:SkipSslValidation) { "skipped (lab or internal certificate)" } else { "enforced" }
+    $authLog = if ($script:AuthMode -eq "PAT") { "PAT (Basic)" } else { $script:AuthMode }
     Write-Log "Configuration loaded successfully."
     Write-Log "  Name       : $($Config.Name)"
     Write-Log "  Server     : $($script:ADOServerFQDN)"
     Write-Log "  Collection : $($script:Collection)$prefixLog"
     Write-Log "  API Version: $($script:ApiVersion)"
-    Write-Log "  Auth Mode  : $($script:AuthMode)"
+    Write-Log "  Auth Mode  : $authLog"
+    Write-Log "  SSL Check  : $sslLog"
     Write-Log "  PAT Status : $patStatus"
 }
 
@@ -153,9 +201,7 @@ function Detect-ApiVersion {
         $url = "$base/$($script:Collection)/_apis/projects?api-version=$ver&`$top=1"
         if (-not $firstUrl) { $firstUrl = $url }
         try {
-            $detectParams = @{ Uri = $url; Method = "Get"; ErrorAction = "Stop" }
-            if ($script:AuthMode -eq "Windows") { $detectParams.UseDefaultCredentials = $true } else { $detectParams.Headers = $script:Headers }
-            $null = Invoke-RestMethod @detectParams
+            $null = Invoke-AdoRest -Uri $url -Method Get
             Write-Log "API version $ver is supported by the server."
             return $ver
         } catch {
@@ -255,10 +301,24 @@ function Invoke-AdoRest {
     try {
         return Invoke-RestMethod @params
     } catch {
+        $msg = $_.Exception.Message
+        $isSsl = $msg -match "trust relationship|SSL/TLS|secure channel"
+        if ($isSsl -and -not $script:SslRetryUsed) {
+            $script:SslRetryUsed = $true
+            Write-Log "The server certificate is not trusted by this computer."
+            Write-Log "Retrying this session with certificate checks disabled."
+            Write-Log 'Add "SkipSslValidation": true to the config so this stays on next time.'
+            Enable-SkipSslValidation
+            return Invoke-AdoRest -Uri $Uri -Method $Method -Body $Body
+        }
         $status = $null
         if ($_.Exception.Response) { $status = [int]$_.Exception.Response.StatusCode }
         Write-Log "REST $Method failed: $Uri"
         if ($status) { Write-Log "HTTP Status: $status" }
+        if ($isSsl) {
+            Write-Log "Still cannot trust the HTTPS certificate."
+            Write-Log "Install the internal CA into Trusted Root, or set SkipSslValidation to true."
+        }
         if ($status -eq 401 -and $script:AuthMode -eq "PAT") {
             Write-Log "Hint: On-prem Azure DevOps Server often requires Basic Auth to be enabled in IIS, or use AuthMode: Windows with a domain account."
         }
@@ -540,6 +600,10 @@ $Form.Controls.AddRange(@(
 ###===================================================================================================
 ## UI Event Handlers
 ###===================================================================================================
+
+###===================================================================================================
+## UI Event Handlers
+###===================================================================================================
 function Refresh-ConfigList {
     $ComboBoxConfig.Items.Clear()
     $script:ConfigEntries = @()
@@ -599,6 +663,8 @@ $ButtonEditConfig.Add_Click({
   "PAT": "",
   "ApiVersion": "auto",
   "UseHttps": true,
+  "AuthMode": "PAT",
+  "SkipSslValidation": true,
   "Notes": ""
 }
 "@
