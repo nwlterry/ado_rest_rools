@@ -1226,7 +1226,7 @@ function Invoke-PolicyOperation {
         $projectCount = 0
         $repoCount = 0
         $elsewhere = New-Object System.Collections.Generic.List[string]
-        $configured = New-Object System.Collections.Generic.List[string]
+        $configured = New-Object System.Collections.Generic.List[object]
         $backedUp = $false
         foreach ($p in $policies) {
             $scopes = @()
