@@ -1133,12 +1133,13 @@ function Invoke-PolicyOperation {
     )
     if ([string]::IsNullOrWhiteSpace($ComboBoxProject.Text)) { Write-Log "Select a project."; return }
     $proj = $ComboBoxProject.Text
+    $typeFilter = [string]$ObjBoxPolicyType.SelectedItem
+    if ([string]::IsNullOrWhiteSpace($typeFilter)) { $typeFilter = "All" }
     if ($IsModify) {
         $confirm = [System.Windows.Forms.MessageBox]::Show(
-            "$Action $Scope policies in '$proj'?`n`nA backup will be created first.",
+            "$Action $Scope-level '$typeFilter' policies in '$proj'?`n`nA backup is saved before the first change.",
             "Confirm", "YesNo")
         if ($confirm -ne "Yes") { return }
-        Backup-CurrentState -Operation "${Action}${Scope}Policy" -ProjectName $proj | Out-Null
     }
 
     try {
@@ -1147,8 +1148,17 @@ function Invoke-PolicyOperation {
         $typeFilter = [string]$ObjBoxPolicyType.SelectedItem
         if ([string]::IsNullOrWhiteSpace($typeFilter)) { $typeFilter = "All" }
         $filterId = ""
-        if ($typeFilter -ne "All" -and $script:PolicyTypeMap.ContainsKey($typeFilter)) {
-            $filterId = [string]$script:PolicyTypeMap[$typeFilter]
+        if ($typeFilter -ne "All") {
+            if ($script:PolicyTypeMap.ContainsKey($typeFilter)) {
+                $filterId = [string]$script:PolicyTypeMap[$typeFilter]
+                Write-Log "Policy type filter: $typeFilter ($filterId)"
+            } else {
+                Write-Log "Policy type '$typeFilter' is not a known type. Showing every configured policy."
+                $typeFilter = "All"
+                Write-Log "Policy type filter: All"
+            }
+        } else {
+            Write-Log "Policy type filter: All"
         }
         if ($Scope -eq "Repo") {
             if ($script:SelectedRepoNames.Count -gt 0) {
@@ -1157,7 +1167,6 @@ function Invoke-PolicyOperation {
                 Write-Log "Repository filter: all repositories"
             }
         }
-        Write-Log "Policy type filter: $typeFilter"
 
         $enc = [uri]::EscapeDataString($proj)
         $policies = @($policies | Where-Object { $_ -ne $null })
@@ -1175,6 +1184,8 @@ function Invoke-PolicyOperation {
         $projectCount = 0
         $repoCount = 0
         $elsewhere = New-Object System.Collections.Generic.List[string]
+        $configured = New-Object System.Collections.Generic.List[string]
+        $backedUp = $false
         foreach ($p in $policies) {
             $scopes = @()
             if ($p.settings -and $p.settings.scope) { $scopes = @($p.settings.scope) }
@@ -1184,8 +1195,6 @@ function Invoke-PolicyOperation {
             }
             $typeId = ""
             if ($p.type -and $p.type.id) { $typeId = ([string]$p.type.id).ToLower() }
-            if ($filterId -and $typeId -ne $filterId.ToLower()) { continue }
-            if ($isRepoLevel) { $repoCount++ } else { $projectCount++ }
             $scopeBits = @()
             foreach ($s in $scopes) {
                 $ref = if ($s.refName) { $s.refName } else { "all branches" }
@@ -1202,6 +1211,8 @@ function Invoke-PolicyOperation {
             $blockText = if ($p.isBlocking) { "blocks completion" } else { "advisory only" }
             $scopeText = if ($scopeBits.Count -gt 0) { $scopeBits -join "; " } else { "whole project" }
             $summary = "  $typeName | Policy #$($p.id) | $onText | $blockText | $scopeText"
+            [void]$configured.Add($summary)
+            if ($filterId -and $typeId -ne $filterId.ToLower()) { continue }
             $wrongScope = ($Scope -eq "Project" -and $isRepoLevel) -or ($Scope -eq "Repo" -and -not $isRepoLevel)
             if ($wrongScope) {
                 [void]$elsewhere.Add($summary)
@@ -1225,6 +1236,10 @@ function Invoke-PolicyOperation {
                 }
                 "Enable" {
                     try {
+                        if (-not $backedUp) {
+                            Backup-CurrentState -Operation "${Action}${Scope}Policy" -ProjectName $proj | Out-Null
+                            $backedUp = $true
+                        }
                         $body = New-PolicyUpdateBody -Policy $p -SetEnabled -Enabled $true
                         $updated = Invoke-AdoRest -Uri $policyUrl -Method Put -Body $body
                         $now = "saved"
@@ -1240,6 +1255,10 @@ function Invoke-PolicyOperation {
                 }
                 "Disable" {
                     try {
+                        if (-not $backedUp) {
+                            Backup-CurrentState -Operation "${Action}${Scope}Policy" -ProjectName $proj | Out-Null
+                            $backedUp = $true
+                        }
                         $body = New-PolicyUpdateBody -Policy $p -SetEnabled -Enabled $false
                         $updated = Invoke-AdoRest -Uri $policyUrl -Method Put -Body $body
                         $now = "saved"
@@ -1255,6 +1274,10 @@ function Invoke-PolicyOperation {
                 }
                 "Delete" {
                     try {
+                        if (-not $backedUp) {
+                            Backup-CurrentState -Operation "${Action}${Scope}Policy" -ProjectName $proj | Out-Null
+                            $backedUp = $true
+                        }
                         Invoke-AdoRest -Uri $policyUrl -Method Delete | Out-Null
                         Write-Log "Deleted '$typeName' (policy #$($p.id))."
                         $changed++
@@ -1277,7 +1300,14 @@ function Invoke-PolicyOperation {
                     Write-Log "Use the Project-Level buttons to change these."
                 }
             } else {
-                Write-Log "Nothing for '$typeFilter' at project level ($projectCount) or repository level ($repoCount)."
+                Write-Log "'$typeFilter' is not configured, so there is nothing to turn on or off."
+                if ($configured.Count -eq 0) {
+                    Write-Log "This project has no Git branch or repository policies."
+                } else {
+                    Write-Log "Policies that are configured:"
+                    foreach ($line in $configured) { Write-Log $line }
+                    Write-Log "Choose one of those types in Policy Type, then query again."
+                }
             }
         } elseif ($Action -eq "Query") {
             Write-Log "Query finished. $matched $Scope-level policy/policies matched '$typeFilter'."
