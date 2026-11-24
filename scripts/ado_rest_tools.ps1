@@ -343,7 +343,7 @@ function ConvertTo-PlainObject {
         foreach ($key in @($Value.Keys)) {
             $h[[string]$key] = ConvertTo-PlainObject -Value $Value[$key] -PropertyName ([string]$key)
         }
-        return $h
+        return ,$h
     }
     if ($Value -is [System.Collections.IEnumerable] -and $Value -isnot [string]) {
         $arr = New-Object System.Collections.ArrayList
@@ -358,7 +358,7 @@ function ConvertTo-PlainObject {
             if ($prop.MemberType -ne "NoteProperty") { continue }
             $h[$prop.Name] = ConvertTo-PlainObject -Value $prop.Value -PropertyName $prop.Name
         }
-        return $h
+        return ,$h
     }
     return $null
 }
@@ -1246,6 +1246,13 @@ function Invoke-PolicyOperation {
             foreach ($s in $scopes) {
                 $ref = if ($s.refName) { $s.refName } else { "all branches" }
                 if ($rid = Get-ScopeRepositoryId $s) {
+                    if (-not $repoNames.ContainsKey($rid)) {
+                        try {
+                            $repoUrl = "$(Get-BaseUrl)/$($script:Collection)/$enc/_apis/git/repositories/${rid}?api-version=$($script:ApiVersion)"
+                            $one = Invoke-AdoRest -Uri $repoUrl -Quiet
+                            if ($one.name) { $repoNames[$rid] = [string]$one.name }
+                        } catch {}
+                    }
                     $repo = if ($repoNames.ContainsKey($rid)) { $repoNames[$rid] } else { "repository $rid" }
                     $scopeBits += "$ref, applies to $repo"
                 } else {
@@ -1299,6 +1306,7 @@ function Invoke-PolicyOperation {
                     } catch {
                         $failed++
                         Write-Log "Could not turn on '$typeName' (policy #$($p.id))."
+                        Write-Log "  $(Get-ErrorDetail $_)"
                     }
                 }
                 "Disable" {
@@ -1318,6 +1326,7 @@ function Invoke-PolicyOperation {
                     } catch {
                         $failed++
                         Write-Log "Could not turn off '$typeName' (policy #$($p.id))."
+                        Write-Log "  $(Get-ErrorDetail $_)"
                     }
                 }
                 "Delete" {
@@ -1332,6 +1341,7 @@ function Invoke-PolicyOperation {
                     } catch {
                         $failed++
                         Write-Log "Could not delete '$typeName' (policy #$($p.id))."
+                        Write-Log "  $(Get-ErrorDetail $_)"
                     }
                 }
             }
