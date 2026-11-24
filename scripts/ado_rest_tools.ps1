@@ -746,28 +746,33 @@ $ButtonLoadConfig.Location = New-Object System.Drawing.Point(365, 24)
 $ButtonLoadConfig.Size = New-Object System.Drawing.Size($btnW, $btnH)
 
 $ButtonEditConfig = New-Object System.Windows.Forms.Button
-$ButtonEditConfig.Text = "Edit / New Config"
+$ButtonEditConfig.Text = "Edit Config"
 $ButtonEditConfig.Location = New-Object System.Drawing.Point(555, 24)
 $ButtonEditConfig.Size = New-Object System.Drawing.Size($btnW, $btnH)
 
+$ButtonNewConfig = New-Object System.Windows.Forms.Button
+$ButtonNewConfig.Text = "New Config"
+$ButtonNewConfig.Location = New-Object System.Drawing.Point(745, 24)
+$ButtonNewConfig.Size = New-Object System.Drawing.Size($btnW, $btnH)
+
 $LabelApiVersion = New-Object System.Windows.Forms.Label
 $LabelApiVersion.Text = "API Version:"
-$LabelApiVersion.Location = New-Object System.Drawing.Point(750, 28)
+$LabelApiVersion.Location = New-Object System.Drawing.Point(935, 28)
 $LabelApiVersion.Size = New-Object System.Drawing.Size(80, 22)
 
 $ComboBoxApiVersion = New-Object System.Windows.Forms.ComboBox
-$ComboBoxApiVersion.Location = New-Object System.Drawing.Point(835, 26)
-$ComboBoxApiVersion.Size = New-Object System.Drawing.Size(100, 24)
+$ComboBoxApiVersion.Location = New-Object System.Drawing.Point(1015, 26)
+$ComboBoxApiVersion.Size = New-Object System.Drawing.Size(90, 24)
 $ComboBoxApiVersion.DropDownStyle = "DropDownList"
 @("auto","6.0","7.0","7.1","7.2") | ForEach-Object { [void]$ComboBoxApiVersion.Items.Add($_) }
 $ComboBoxApiVersion.SelectedItem = "auto"
 
 $ButtonExit = New-Object System.Windows.Forms.Button
 $ButtonExit.Text = "Exit"
-$ButtonExit.Location = New-Object System.Drawing.Point(1100, 24)
-$ButtonExit.Size = New-Object System.Drawing.Size(120, $btnH)
+$ButtonExit.Location = New-Object System.Drawing.Point(1115, 24)
+$ButtonExit.Size = New-Object System.Drawing.Size($btnW, $btnH)
 
-$GroupEnv.Controls.AddRange(@($LabelConfig, $ComboBoxConfig, $ButtonLoadConfig, $ButtonEditConfig, $LabelApiVersion, $ComboBoxApiVersion, $ButtonExit))
+$GroupEnv.Controls.AddRange(@($LabelConfig, $ComboBoxConfig, $ButtonLoadConfig, $ButtonEditConfig, $ButtonNewConfig, $LabelApiVersion, $ComboBoxApiVersion, $ButtonExit))
 
 # --- Group: Project ---
 $GroupProject = New-Object System.Windows.Forms.GroupBox
@@ -982,6 +987,7 @@ function Refresh-ConfigList {
         $entries = Get-ConfigEntries -Obj $cfg
         foreach ($e in $entries) {
             $display = if ($e.Name) { $e.Name } else { $f.BaseName }
+            $e | Add-Member -NotePropertyName SourceFile -NotePropertyValue $f.FullName -Force
             [void]$ComboBoxConfig.Items.Add($display)
             $script:ConfigEntries += $e
         }
@@ -989,7 +995,7 @@ function Refresh-ConfigList {
     if ($ComboBoxConfig.Items.Count -gt 0) {
         $ComboBoxConfig.SelectedIndex = 0
     } else {
-        Write-Log "No config files found in $($script:ConfigsPath). Use 'Edit / New Config' to create one."
+        Write-Log "No config files found in $($script:ConfigsPath). Use New Config to create one."
     }
 }
 
@@ -1012,34 +1018,14 @@ $ButtonLoadConfig.Add_Click({
     $ButtonRefreshProjects.PerformClick()
 })
 
-$ButtonEditConfig.Add_Click({
-    $files = Get-ConfigFiles
-    $targetPath = $null
-    if ($ComboBoxConfig.SelectedIndex -ge 0 -and $files.Count -gt $ComboBoxConfig.SelectedIndex) {
-        $targetPath = $files[$ComboBoxConfig.SelectedIndex].FullName
-    } else {
-        $name = [Microsoft.VisualBasic.Interaction]::InputBox("New config name (filename without .json):", "New Config", "new-environment")
-        if ([string]::IsNullOrWhiteSpace($name)) { return }
-        $targetPath = Join-Path $script:ConfigsPath "$name.json"
-    }
-
-    $existing = if (Test-Path $targetPath) { Get-Content $targetPath -Raw } else { @"
-{
-  "Name": "$([System.IO.Path]::GetFileNameWithoutExtension($targetPath))",
-  "ServerFQDN": "",
-  "Collection": "DevOpsCollection",
-  "PAT": "",
-  "ApiVersion": "auto",
-  "UseHttps": true,
-  "AuthMode": "PAT",
-  "SkipSslValidation": true,
-  "Notes": ""
-}
-"@
-    }
-
+function Show-ConfigEditor {
+    param(
+        [string]$TargetPath,
+        [string]$Title,
+        [string]$InitialText
+    )
     $editor = New-Object System.Windows.Forms.Form
-    $editor.Text = "Edit Config: $(Split-Path $targetPath -Leaf)"
+    $editor.Text = $Title
     $editor.Size = New-Object System.Drawing.Size(700, 500)
     $editor.StartPosition = "CenterParent"
     $tb = New-Object System.Windows.Forms.TextBox
@@ -1047,7 +1033,7 @@ $ButtonEditConfig.Add_Click({
     $tb.ScrollBars = "Both"
     $tb.Dock = "Fill"
     $tb.Font = New-Object System.Drawing.Font("Consolas", 10)
-    $tb.Text = $existing
+    $tb.Text = $InitialText
     $editor.Controls.Add($tb)
     $ok = New-Object System.Windows.Forms.Button
     $ok.Text = "Save"
@@ -1056,17 +1042,71 @@ $ButtonEditConfig.Add_Click({
     $ok.Add_Click({
         try {
             $null = $tb.Text | ConvertFrom-Json
-            Set-Content -Path $targetPath -Value $tb.Text -Encoding UTF8
+            Set-Content -Path $TargetPath -Value $tb.Text -Encoding UTF8
             $editor.DialogResult = "OK"
             $editor.Close()
         } catch {
             [System.Windows.Forms.MessageBox]::Show("Invalid JSON: $_", "Error")
         }
-    })
+    }.GetNewClosure())
     $editor.Controls.Add($ok)
-    if ($editor.ShowDialog() -eq "OK") {
+    return ($editor.ShowDialog() -eq "OK")
+}
+
+function Get-NewConfigTemplate {
+    param([string]$Name)
+    @"
+{
+  "Name": "$Name",
+  "ServerFQDN": "",
+  "Collection": "DevOpsCollection",
+  "UrlPrefix": "",
+  "PAT": "",
+  "ApiVersion": "auto",
+  "UseHttps": true,
+  "AuthMode": "PAT",
+  "SkipSslValidation": true,
+  "Notes": ""
+}
+"@
+}
+
+$ButtonEditConfig.Add_Click({
+    if ($ComboBoxConfig.SelectedIndex -lt 0 -or -not $script:ConfigEntries) {
+        Write-Log "Select a config to edit."
+        return
+    }
+    $entry = $script:ConfigEntries[$ComboBoxConfig.SelectedIndex]
+    $targetPath = [string]$entry.SourceFile
+    if ([string]::IsNullOrWhiteSpace($targetPath) -or -not (Test-Path $targetPath)) {
+        Write-Log "The selected config file was not found."
+        return
+    }
+    $existing = Get-Content $targetPath -Raw
+    $saved = Show-ConfigEditor -TargetPath $targetPath -Title "Edit Config: $(Split-Path $targetPath -Leaf)" -InitialText $existing
+    if ($saved) {
         Refresh-ConfigList
         Write-Log "Config saved: $targetPath"
+    }
+})
+
+$ButtonNewConfig.Add_Click({
+    $name = [Microsoft.VisualBasic.Interaction]::InputBox("New config name (filename without .json):", "New Config", "new-environment")
+    if ([string]::IsNullOrWhiteSpace($name)) { return }
+    $name = $name.Trim() -replace '[\\/:*?"<>|]', ''
+    if ([string]::IsNullOrWhiteSpace($name)) {
+        Write-Log "Config name is empty."
+        return
+    }
+    $targetPath = Join-Path $script:ConfigsPath "$name.json"
+    if (Test-Path $targetPath) {
+        Write-Log "Config already exists: $targetPath. Use Edit Config to change it."
+        return
+    }
+    $saved = Show-ConfigEditor -TargetPath $targetPath -Title "New Config: $name.json" -InitialText (Get-NewConfigTemplate -Name $name)
+    if ($saved) {
+        Refresh-ConfigList
+        Write-Log "Config created: $targetPath"
     }
 })
 
