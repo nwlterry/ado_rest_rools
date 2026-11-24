@@ -338,13 +338,6 @@ function ConvertTo-PlainObject {
     if ($Value -is [string]) { return $Value }
     if ($Value -is [datetime]) { return $Value.ToString("o") }
     if ($Value -is [ValueType]) { return $Value }
-    if ($Value -is [PSCustomObject]) {
-        $h = New-Object System.Collections.Hashtable
-        foreach ($prop in $Value.PSObject.Properties) {
-            $h[$prop.Name] = ConvertTo-PlainObject -Value $prop.Value -PropertyName $prop.Name
-        }
-        return $h
-    }
     if ($Value -is [System.Collections.IDictionary]) {
         $h = New-Object System.Collections.Hashtable
         foreach ($key in @($Value.Keys)) {
@@ -352,14 +345,22 @@ function ConvertTo-PlainObject {
         }
         return $h
     }
-    if ($Value -is [System.Collections.IEnumerable]) {
+    if ($Value -is [System.Collections.IEnumerable] -and $Value -isnot [string]) {
         $arr = New-Object System.Collections.ArrayList
         foreach ($item in @($Value)) {
             if ($null -ne $item) { [void]$arr.Add((ConvertTo-PlainObject -Value $item)) }
         }
         return ,$arr.ToArray()
     }
-    return [string]$Value
+    if ($Value -is [psobject]) {
+        $h = New-Object System.Collections.Hashtable
+        foreach ($prop in @($Value.PSObject.Properties)) {
+            if ($prop.MemberType -ne "NoteProperty") { continue }
+            $h[$prop.Name] = ConvertTo-PlainObject -Value $prop.Value -PropertyName $prop.Name
+        }
+        return $h
+    }
+    return $null
 }
 
 function ConvertTo-AdoJson {
@@ -389,11 +390,22 @@ function Get-RestErrorBody {
     } catch { return $null }
 }
 
+function Get-ScopeRepositoryId {
+    param($Scope)
+    if ($null -eq $Scope) { return "" }
+    $raw = $Scope.repositoryId
+    if ($null -eq $raw) { return "" }
+    if ($raw -is [psobject] -and $raw.PSObject.Properties.Name -contains "id") { $raw = $raw.id }
+    $text = ([string]$raw).Trim().Trim("{}")
+    if ($text -match "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$") {
+        return $text.ToLower()
+    }
+    return ""
+}
+
 function Test-RealRepositoryId {
     param($Id)
-    $text = [string]$Id
-    if ([string]::IsNullOrWhiteSpace($text)) { return $false }
-    return $text -ne "00000000-0000-0000-0000-000000000000"
+    return -not [string]::IsNullOrWhiteSpace((Get-ScopeRepositoryId ([pscustomobject]@{ repositoryId = $Id })))
 }
 
 function New-PolicyUpdateBody {
@@ -520,15 +532,11 @@ function Test-ApplicableGitPolicy {
     return $false
 }
 
-function Get-Policies {
-    param([string]$ProjectName)
-    Ensure-ApiVersion
-    $enc = [uri]::EscapeDataString($ProjectName)
+function Get-PolicyConfigurationPages {
+    param([string]$FirstUrl)
     $collected = @()
-    $token = $null
+    $url = $FirstUrl
     for ($page = 0; $page -lt 20; $page++) {
-        $url = "$(Get-BaseUrl)/$($script:Collection)/$enc/_apis/policy/configurations?api-version=$($script:ApiVersion)&`$top=200"
-        if ($token) { $url += "&continuationToken=$([uri]::EscapeDataString($token))" }
         $params = @{
             Uri             = $url
             Method          = "Get"
@@ -542,12 +550,43 @@ function Get-Policies {
         $json = $resp.Content | ConvertFrom-Json
         if ($json.value) { $collected += @($json.value) }
         $token = $null
-        if ($resp.Headers["x-ms-continuationtoken"]) {
-            $token = [string]$resp.Headers["x-ms-continuationtoken"]
+        foreach ($key in @($resp.Headers.Keys)) {
+            if ($key -eq "x-ms-continuationtoken") { $token = [string]$resp.Headers[$key] }
         }
         if ([string]::IsNullOrWhiteSpace($token)) { break }
+        $join = if ($FirstUrl -match "\?") { "&" } else { "?" }
+        $url = "$FirstUrl${join}continuationToken=$([uri]::EscapeDataString($token))"
     }
-    return @($collected | Where-Object { Test-ApplicableGitPolicy $_ })
+    return @($collected)
+}
+
+function Get-Policies {
+    param([string]$ProjectName)
+    Ensure-ApiVersion
+    $enc = [uri]::EscapeDataString($ProjectName)
+    $root = "$(Get-BaseUrl)/$($script:Collection)/$enc"
+    $byId = @{}
+    $urls = @(
+        "$root/_apis/policy/configurations?api-version=$($script:ApiVersion)&`$top=200",
+        "$root/_apis/git/policy/configurations?api-version=$($script:ApiVersion)&`$top=200"
+    )
+    try { $script:RepoListCache = @(Get-Repositories -ProjectName $ProjectName) } catch { $script:RepoListCache = @() }
+    foreach ($repo in @($script:RepoListCache)) {
+        if (-not $repo.id) { continue }
+        $urls += "$root/_apis/git/policy/configurations?repositoryId=$($repo.id)&api-version=$($script:ApiVersion)&`$top=200"
+    }
+    foreach ($url in $urls) {
+        try {
+            foreach ($item in @(Get-PolicyConfigurationPages -FirstUrl $url)) {
+                if ($null -eq $item -or $item.isDeleted -or $null -eq $item.id) { continue }
+                if (-not (Test-ApplicableGitPolicy $item)) { continue }
+                $byId[[string]$item.id] = $item
+            }
+        } catch {
+            if ($url -notmatch "/git/policy/") { throw }
+        }
+    }
+    return @($byId.Values)
 }
 
 function Update-PolicyTypeCombo {
@@ -1170,14 +1209,17 @@ function Invoke-PolicyOperation {
 
         $enc = [uri]::EscapeDataString($proj)
         $policies = @($policies | Where-Object { $_ -ne $null })
-        if (-not $script:RepoListCache -or @($script:RepoListCache).Count -eq 0) {
-            try { $script:RepoListCache = @(Get-Repositories -ProjectName $proj) } catch {}
-        }
+        try { $script:RepoListCache = @(Get-Repositories -ProjectName $proj) } catch {}
         $repoNames = @{}
         foreach ($cached in @($script:RepoListCache)) {
-            if ($cached.id) { $repoNames[([string]$cached.id).ToLower()] = [string]$cached.name }
+            $rid = Get-ScopeRepositoryId ([pscustomobject]@{ repositoryId = $cached.id })
+            if ($rid) { $repoNames[$rid] = [string]$cached.name }
         }
-        $selectedIds = @($script:SelectedRepoIds | ForEach-Object { ([string]$_).ToLower() })
+        $selectedIds = @()
+        foreach ($id in @($script:SelectedRepoIds)) {
+            $rid = Get-ScopeRepositoryId ([pscustomobject]@{ repositoryId = $id })
+            if ($rid) { $selectedIds += $rid }
+        }
         $matched = 0
         $changed = 0
         $failed = 0
@@ -1190,17 +1232,21 @@ function Invoke-PolicyOperation {
             $scopes = @()
             if ($p.settings -and $p.settings.scope) { $scopes = @($p.settings.scope) }
             $isRepoLevel = $false
+            $scopeRepoIds = @()
             foreach ($s in $scopes) {
-                if (Test-RealRepositoryId $s.repositoryId) { $isRepoLevel = $true; break }
+                $rid = Get-ScopeRepositoryId $s
+                if ($rid) {
+                    $isRepoLevel = $true
+                    $scopeRepoIds += $rid
+                }
             }
             $typeId = ""
             if ($p.type -and $p.type.id) { $typeId = ([string]$p.type.id).ToLower() }
             $scopeBits = @()
             foreach ($s in $scopes) {
                 $ref = if ($s.refName) { $s.refName } else { "all branches" }
-                if (Test-RealRepositoryId $s.repositoryId) {
-                    $rid = ([string]$s.repositoryId).ToLower()
-                    $repo = if ($repoNames.ContainsKey($rid)) { $repoNames[$rid] } else { "one repository" }
+                if ($rid = Get-ScopeRepositoryId $s) {
+                    $repo = if ($repoNames.ContainsKey($rid)) { $repoNames[$rid] } else { "repository $rid" }
                     $scopeBits += "$ref, applies to $repo"
                 } else {
                     $scopeBits += "$ref, applies to all repositories"
@@ -1211,7 +1257,10 @@ function Invoke-PolicyOperation {
             $blockText = if ($p.isBlocking) { "blocks completion" } else { "advisory only" }
             $scopeText = if ($scopeBits.Count -gt 0) { $scopeBits -join "; " } else { "whole project" }
             $summary = "  $typeName | Policy #$($p.id) | $onText | $blockText | $scopeText"
-            [void]$configured.Add($summary)
+            [void]$configured.Add([pscustomobject]@{
+                Summary = $summary
+                RepoIds = @($scopeRepoIds)
+            })
             if ($filterId -and $typeId -ne $filterId.ToLower()) { continue }
             $wrongScope = ($Scope -eq "Project" -and $isRepoLevel) -or ($Scope -eq "Repo" -and -not $isRepoLevel)
             if ($wrongScope) {
@@ -1220,8 +1269,7 @@ function Invoke-PolicyOperation {
             }
             if ($Scope -eq "Repo" -and $selectedIds.Count -gt 0) {
                 $applies = $false
-                foreach ($s in $scopes) {
-                    $rid = ([string]$s.repositoryId).ToLower()
+                foreach ($rid in $scopeRepoIds) {
                     if ($selectedIds -contains $rid) { $applies = $true; break }
                 }
                 if (-not $applies) { continue }
@@ -1300,14 +1348,34 @@ function Invoke-PolicyOperation {
                     Write-Log "Use the Project-Level buttons to change these."
                 }
             } else {
-                Write-Log "'$typeFilter' is not configured, so there is nothing to turn on or off."
-                if ($configured.Count -eq 0) {
+                if ($selectedIds.Count -gt 0) {
+                    $wanted = @($script:SelectedRepoNames) -join ", "
+                    Write-Log "No '$typeFilter' policy applies to: $wanted"
+                } else {
+                    Write-Log "'$typeFilter' is not configured, so there is nothing to turn on or off."
+                }
+                $onSelection = @()
+                $others = @()
+                foreach ($row in $configured) {
+                    $hit = $false
+                    if ($selectedIds.Count -eq 0) { $hit = $true }
+                    else {
+                        foreach ($rid in @($row.RepoIds)) {
+                            if ($selectedIds -contains $rid) { $hit = $true; break }
+                        }
+                    }
+                    if ($hit) { $onSelection += $row.Summary } else { $others += $row.Summary }
+                }
+                if ($selectedIds.Count -gt 0 -and $onSelection.Count -gt 0) {
+                    Write-Log "Policies on the selected repository:"
+                    foreach ($line in $onSelection) { Write-Log $line }
+                } elseif ($onSelection.Count -eq 0 -and $others.Count -eq 0) {
                     Write-Log "This project has no Git branch or repository policies."
                 } else {
-                    Write-Log "Policies that are configured:"
-                    foreach ($line in $configured) { Write-Log $line }
-                    Write-Log "Choose one of those types in Policy Type, then query again."
+                    Write-Log "Policies configured in this project:"
+                    foreach ($line in ($onSelection + $others)) { Write-Log $line }
                 }
+                Write-Log "No '$typeFilter' policy exists yet. The list above is everything this project has."
             }
         } elseif ($Action -eq "Query") {
             Write-Log "Query finished. $matched $Scope-level policy/policies matched '$typeFilter'."
