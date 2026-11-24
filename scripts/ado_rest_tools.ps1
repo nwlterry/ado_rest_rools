@@ -363,13 +363,40 @@ function ConvertTo-PlainObject {
     return $null
 }
 
+function Repair-JsonArrays {
+    param($Node)
+    if ($Node -is [System.Collections.IDictionary]) {
+        foreach ($key in @($Node.Keys)) {
+            $child = Repair-JsonArrays $Node[$key]
+            if (($script:JsonArrayProperties -contains [string]$key) -and $null -ne $child -and $child -isnot [System.Collections.IList]) {
+                $list = New-Object System.Collections.ArrayList
+                [void]$list.Add($child)
+                $child = $list
+            }
+            $Node[$key] = $child
+        }
+        return $Node
+    }
+    if ($Node -is [System.Collections.IList] -and $Node -isnot [string]) {
+        for ($i = 0; $i -lt $Node.Count; $i++) {
+            $Node[$i] = Repair-JsonArrays $Node[$i]
+        }
+        return $Node
+    }
+    return $Node
+}
+
 function ConvertTo-AdoJson {
     param($Value)
-    $plain = ConvertTo-PlainObject -Value $Value
+    # ConvertTo-Json understands PowerShell objects. JavaScriptSerializer does not:
+    # it walks PSParameterizedProperty and throws a circular-reference error.
+    # DeserializeObject gives plain .NET dictionaries, then scope is forced back to an array.
+    $json = $Value | ConvertTo-Json -Depth 100 -Compress
     Add-Type -AssemblyName System.Web.Extensions -ErrorAction SilentlyContinue
     $ser = New-Object System.Web.Script.Serialization.JavaScriptSerializer
     $ser.MaxJsonLength = 67108864
     $ser.RecursionLimit = 80
+    $plain = Repair-JsonArrays ($ser.DeserializeObject($json))
     return $ser.Serialize($plain)
 }
 
@@ -1306,7 +1333,9 @@ function Invoke-PolicyOperation {
                     } catch {
                         $failed++
                         Write-Log "Could not turn on '$typeName' (policy #$($p.id))."
-                        Write-Log "  $(Get-ErrorDetail $_)"
+                        $why = $_.Exception.InnerException
+                        if (-not $why) { $why = $_.Exception }
+                        Write-Log "  $($why.Message)"
                     }
                 }
                 "Disable" {
@@ -1326,7 +1355,9 @@ function Invoke-PolicyOperation {
                     } catch {
                         $failed++
                         Write-Log "Could not turn off '$typeName' (policy #$($p.id))."
-                        Write-Log "  $(Get-ErrorDetail $_)"
+                        $why = $_.Exception.InnerException
+                        if (-not $why) { $why = $_.Exception }
+                        Write-Log "  $($why.Message)"
                     }
                 }
                 "Delete" {
@@ -1341,7 +1372,9 @@ function Invoke-PolicyOperation {
                     } catch {
                         $failed++
                         Write-Log "Could not delete '$typeName' (policy #$($p.id))."
-                        Write-Log "  $(Get-ErrorDetail $_)"
+                        $why = $_.Exception.InnerException
+                        if (-not $why) { $why = $_.Exception }
+                        Write-Log "  $($why.Message)"
                     }
                 }
             }
