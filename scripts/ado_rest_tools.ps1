@@ -363,41 +363,58 @@ function ConvertTo-PlainObject {
     return $null
 }
 
-function Repair-JsonArrays {
-    param($Node)
-    if ($Node -is [System.Collections.IDictionary]) {
-        foreach ($key in @($Node.Keys)) {
-            $child = Repair-JsonArrays $Node[$key]
-            if (($script:JsonArrayProperties -contains [string]$key) -and $null -ne $child -and $child -isnot [System.Collections.IList]) {
-                $list = New-Object System.Collections.ArrayList
-                [void]$list.Add($child)
-                $child = $list
-            }
-            $Node[$key] = $child
-        }
-        return $Node
-    }
-    if ($Node -is [System.Collections.IList] -and $Node -isnot [string]) {
-        for ($i = 0; $i -lt $Node.Count; $i++) {
-            $Node[$i] = Repair-JsonArrays $Node[$i]
-        }
-        return $Node
-    }
-    return $Node
-}
-
 function ConvertTo-AdoJson {
     param($Value)
-    # ConvertTo-Json understands PowerShell objects. JavaScriptSerializer does not:
-    # it walks PSParameterizedProperty and throws a circular-reference error.
-    # DeserializeObject gives plain .NET dictionaries, then scope is forced back to an array.
+    # ConvertTo-Json understands PowerShell objects. JavaScriptSerializer must not
+    # see them: passing a PSObject into Serialize walks PSParameterizedProperty
+    # and throws a circular-reference error. Repair runs entirely in C#.
+    if (-not ("AdoPolicyJson" -as [type])) {
+        Add-Type -AssemblyName System.Web.Extensions
+        $asm = [System.Web.Script.Serialization.JavaScriptSerializer].Assembly.Location
+        Add-Type -ReferencedAssemblies $asm -TypeDefinition @"
+using System;
+using System.Collections;
+using System.Collections.Generic;
+using System.Web.Script.Serialization;
+public static class AdoPolicyJson {
+    static readonly string[] ForceArray = new string[] { "scope", "requiredReviewerIds", "optionalReviewerIds", "filenamePatterns" };
+    public static string ToJson(string json) {
+        var ser = new JavaScriptSerializer();
+        ser.MaxJsonLength = 67108864;
+        ser.RecursionLimit = 128;
+        object graph = ser.DeserializeObject(json);
+        graph = Repair(graph);
+        return ser.Serialize(graph);
+    }
+    static object Repair(object node) {
+        var dict = node as IDictionary<string, object>;
+        if (dict != null) {
+            var keys = new List<string>(dict.Keys);
+            foreach (var key in keys) {
+                object child = Repair(dict[key]);
+                if (child != null && !(child is IList) && Array.IndexOf(ForceArray, key) >= 0) {
+                    var list = new ArrayList();
+                    list.Add(child);
+                    child = list;
+                }
+                dict[key] = child;
+            }
+            return dict;
+        }
+        var listNode = node as IList;
+        if (listNode != null && !(node is string)) {
+            for (int i = 0; i < listNode.Count; i++) {
+                listNode[i] = Repair(listNode[i]);
+            }
+            return listNode;
+        }
+        return node;
+    }
+}
+"@
+    }
     $json = $Value | ConvertTo-Json -Depth 100 -Compress
-    Add-Type -AssemblyName System.Web.Extensions -ErrorAction SilentlyContinue
-    $ser = New-Object System.Web.Script.Serialization.JavaScriptSerializer
-    $ser.MaxJsonLength = 67108864
-    $ser.RecursionLimit = 80
-    $plain = Repair-JsonArrays ($ser.DeserializeObject($json))
-    return $ser.Serialize($plain)
+    return [AdoPolicyJson]::ToJson([string]$json)
 }
 
 function Get-RestErrorBody {
