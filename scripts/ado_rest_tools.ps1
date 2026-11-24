@@ -998,12 +998,16 @@ $ButtonRefreshProjects.Add_Click({
     }
     try {
         $ComboBoxProject.Items.Clear()
-        $projects = Get-Projects | Sort-Object name
+        $projects = @(Get-Projects | Where-Object { $_ -and $_.name } | Sort-Object name)
         foreach ($p in $projects) { [void]$ComboBoxProject.Items.Add($p.name) }
-        $ComboBoxProject.Enabled = ($ComboBoxProject.Items.Count -gt 0)
+        $ComboBoxProject.Enabled = ($projects.Count -gt 0)
         $ButtonSelectRepos.Enabled = $ComboBoxProject.Enabled
         $ObjBoxBranch.Enabled = $ComboBoxProject.Enabled
         Write-Log "Successfully retrieved $($projects.Count) project(s) from the collection."
+        if ($projects.Count -gt 0) {
+            $ComboBoxProject.SelectedIndex = 0
+            Write-Log "Selected project: $($ComboBoxProject.Text)"
+        }
     } catch {
         $msg = Get-ErrorDetail $_
         if ($msg -match "401") {
@@ -1157,6 +1161,9 @@ function Invoke-PolicyOperation {
 
         $enc = [uri]::EscapeDataString($proj)
         $policies = @($policies | Where-Object { $_ -ne $null })
+        if (-not $script:RepoListCache -or @($script:RepoListCache).Count -eq 0) {
+            try { $script:RepoListCache = @(Get-Repositories -ProjectName $proj) } catch {}
+        }
         $repoNames = @{}
         foreach ($cached in @($script:RepoListCache)) {
             if ($cached.id) { $repoNames[([string]$cached.id).ToLower()] = [string]$cached.name }
@@ -1167,6 +1174,7 @@ function Invoke-PolicyOperation {
         $failed = 0
         $projectCount = 0
         $repoCount = 0
+        $elsewhere = New-Object System.Collections.Generic.List[string]
         foreach ($p in $policies) {
             $scopes = @()
             if ($p.settings -and $p.settings.scope) { $scopes = @($p.settings.scope) }
@@ -1174,11 +1182,31 @@ function Invoke-PolicyOperation {
             foreach ($s in $scopes) {
                 if (Test-RealRepositoryId $s.repositoryId) { $isRepoLevel = $true; break }
             }
-            if ($isRepoLevel) { $repoCount++ } else { $projectCount++ }
-            if (($Scope -eq "Project" -and $isRepoLevel) -or ($Scope -eq "Repo" -and -not $isRepoLevel)) { continue }
             $typeId = ""
             if ($p.type -and $p.type.id) { $typeId = ([string]$p.type.id).ToLower() }
             if ($filterId -and $typeId -ne $filterId.ToLower()) { continue }
+            if ($isRepoLevel) { $repoCount++ } else { $projectCount++ }
+            $scopeBits = @()
+            foreach ($s in $scopes) {
+                $ref = if ($s.refName) { $s.refName } else { "all branches" }
+                if (Test-RealRepositoryId $s.repositoryId) {
+                    $rid = ([string]$s.repositoryId).ToLower()
+                    $repo = if ($repoNames.ContainsKey($rid)) { $repoNames[$rid] } else { "one repository" }
+                    $scopeBits += "$ref, applies to $repo"
+                } else {
+                    $scopeBits += "$ref, applies to all repositories"
+                }
+            }
+            $typeName = if ($p.type.displayName) { $p.type.displayName } else { $typeId }
+            $onText = if ($p.isEnabled) { "On" } else { "Off" }
+            $blockText = if ($p.isBlocking) { "blocks completion" } else { "advisory only" }
+            $scopeText = if ($scopeBits.Count -gt 0) { $scopeBits -join "; " } else { "whole project" }
+            $summary = "  $typeName | Policy #$($p.id) | $onText | $blockText | $scopeText"
+            $wrongScope = ($Scope -eq "Project" -and $isRepoLevel) -or ($Scope -eq "Repo" -and -not $isRepoLevel)
+            if ($wrongScope) {
+                [void]$elsewhere.Add($summary)
+                continue
+            }
             if ($Scope -eq "Repo" -and $selectedIds.Count -gt 0) {
                 $applies = $false
                 foreach ($s in $scopes) {
@@ -1190,25 +1218,10 @@ function Invoke-PolicyOperation {
 
             $matched++
             $policyUrl = "$(Get-BaseUrl)/$($script:Collection)/$enc/_apis/policy/configurations/$($p.id)?api-version=$($script:ApiVersion)"
-            $typeName = if ($p.type.displayName) { $p.type.displayName } else { $typeId }
 
             switch ($Action) {
                 "Query" {
-                    $onText = if ($p.isEnabled) { "On" } else { "Off" }
-                    $blockText = if ($p.isBlocking) { "blocks completion" } else { "advisory only" }
-                    $scopeBits = @()
-                    foreach ($s in $scopes) {
-                        $ref = if ($s.refName) { $s.refName } else { "all branches" }
-                        if (Test-RealRepositoryId $s.repositoryId) {
-                            $rid = ([string]$s.repositoryId).ToLower()
-                            $repo = if ($repoNames.ContainsKey($rid)) { $repoNames[$rid] } else { "one repository" }
-                            $scopeBits += "$ref, applies to $repo"
-                        } else {
-                            $scopeBits += "$ref, applies to all repositories"
-                        }
-                    }
-                    $scopeText = if ($scopeBits.Count -gt 0) { $scopeBits -join "; " } else { "whole project" }
-                    Write-Log "  $typeName | Policy #$($p.id) | $onText | $blockText | $scopeText"
+                    Write-Log $summary
                 }
                 "Enable" {
                     try {
@@ -1254,12 +1267,17 @@ function Invoke-PolicyOperation {
         }
         if ($matched -eq 0) {
             Write-Log "No $Scope-level policies matched '$typeFilter'."
-            Write-Log "This project has $projectCount project-level and $repoCount repository-level policies."
-            if ($Scope -eq "Repo" -and $repoCount -eq 0 -and $projectCount -gt 0) {
-                Write-Log "Those policies apply to all repositories. Use the Project-Level buttons for them."
-            }
-            if ($Scope -eq "Project" -and $projectCount -eq 0 -and $repoCount -gt 0) {
-                Write-Log "Those policies are set on individual repositories. Use the Repository-Level buttons for them."
+            if ($elsewhere.Count -gt 0) {
+                $other = if ($Scope -eq "Project") { "repository" } else { "project" }
+                Write-Log "This type is set at $other level ($($elsewhere.Count)):"
+                foreach ($line in $elsewhere) { Write-Log $line }
+                if ($Scope -eq "Project") {
+                    Write-Log "Use the Repository-Level buttons to change these."
+                } else {
+                    Write-Log "Use the Project-Level buttons to change these."
+                }
+            } else {
+                Write-Log "Nothing for '$typeFilter' at project level ($projectCount) or repository level ($repoCount)."
             }
         } elseif ($Action -eq "Query") {
             Write-Log "Query finished. $matched $Scope-level policy/policies matched '$typeFilter'."
