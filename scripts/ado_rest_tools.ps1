@@ -490,12 +490,64 @@ function Get-Repositories {
     return (Invoke-AdoRest -Uri $url).value
 }
 
+# Policy types that Azure DevOps can apply to all repositories (project) or one repository.
+# Anything else returned by /policy/types (TFVC check-in policies, and so on) is left out.
+$script:ApplicablePolicyTypeIds = @{
+    "fa4e907d-c16b-4a4c-9dfa-4906e5d171dd" = "Minimum number of reviewers"
+    "fd2167ab-b0be-447a-8ec8-39368250530e" = "Required reviewers"
+    "c6a1889d-b943-4856-b76f-9e46bb6b0df2" = "Comment requirements"
+    "40e92b44-2fe1-4dd6-b3d8-74a9c21d0c6e" = "Work item linking"
+    "0609b952-1397-4640-95ec-e00a01b2c241" = "Build validation"
+    "fa4e907d-c16b-4a4c-9dfa-4916e5d171ab" = "Require a merge strategy"
+    "cbdc66da-9728-4af8-aada-9a5a32e4a226" = "Status checks"
+    "2e26e725-8201-4edd-8bf5-978563c34a80" = "Maximum file size"
+    "7ed39669-655c-494e-b4a0-a08b4da0fcce" = "Case enforcement"
+}
+
+function Test-ApplicableGitPolicy {
+    param($Policy)
+    if ($null -eq $Policy -or $Policy.isDeleted) { return $false }
+    if (-not $Policy.settings -or $null -eq $Policy.settings.scope) { return $false }
+    $scopes = @($Policy.settings.scope)
+    if ($scopes.Count -eq 0) { return $false }
+    foreach ($s in $scopes) {
+        if ($null -eq $s) { continue }
+        $names = @($s.PSObject.Properties.Name)
+        if ($names -contains "repositoryId" -or $names -contains "refName" -or $names -contains "matchKind") {
+            return $true
+        }
+    }
+    return $false
+}
+
 function Get-Policies {
     param([string]$ProjectName)
     Ensure-ApiVersion
     $enc = [uri]::EscapeDataString($ProjectName)
-    $url = "$(Get-BaseUrl)/$($script:Collection)/$enc/_apis/policy/configurations?api-version=$($script:ApiVersion)"
-    return (Invoke-AdoRest -Uri $url).value
+    $collected = @()
+    $token = $null
+    for ($page = 0; $page -lt 20; $page++) {
+        $url = "$(Get-BaseUrl)/$($script:Collection)/$enc/_apis/policy/configurations?api-version=$($script:ApiVersion)&`$top=200"
+        if ($token) { $url += "&continuationToken=$([uri]::EscapeDataString($token))" }
+        $params = @{
+            Uri             = $url
+            Method          = "Get"
+            TimeoutSec      = 30
+            UseBasicParsing = $true
+            ErrorAction     = "Stop"
+        }
+        if ($script:AuthMode -eq "Windows") { $params.UseDefaultCredentials = $true }
+        else { $params.Headers = $script:Headers }
+        $resp = Invoke-WebRequest @params
+        $json = $resp.Content | ConvertFrom-Json
+        if ($json.value) { $collected += @($json.value) }
+        $token = $null
+        if ($resp.Headers["x-ms-continuationtoken"]) {
+            $token = [string]$resp.Headers["x-ms-continuationtoken"]
+        }
+        if ([string]::IsNullOrWhiteSpace($token)) { break }
+    }
+    return @($collected | Where-Object { Test-ApplicableGitPolicy $_ })
 }
 
 function Update-PolicyTypeCombo {
@@ -523,17 +575,36 @@ function Refresh-PolicyTypesFromServer {
         $enc = [uri]::EscapeDataString($ProjectName)
         $url = "$(Get-BaseUrl)/$($script:Collection)/$enc/_apis/policy/types?api-version=$($script:ApiVersion)"
         $resp = Invoke-AdoRest -Uri $url -Method Get -Quiet
+        $policies = @(Get-Policies -ProjectName $ProjectName)
         $previousName = [string]$ObjBoxPolicyType.SelectedItem
         $previousId = ""
         if ($previousName -and $script:PolicyTypeMap.ContainsKey($previousName)) {
             $previousId = [string]$script:PolicyTypeMap[$previousName]
         }
         $map = @{ "All" = "" }
+        $seen = @{}
         foreach ($t in @($resp.value)) {
             if (-not $t.id) { continue }
-            $name = if ($t.displayName) { [string]$t.displayName } else { [string]$t.id }
-            if ($map.ContainsKey($name)) { $name = "$name ($([string]$t.id))" }
-            $map[$name] = ([string]$t.id).ToLower()
+            $id = ([string]$t.id).ToLower()
+            if (-not $script:ApplicablePolicyTypeIds.ContainsKey($id)) { continue }
+            $name = if ($t.displayName) { [string]$t.displayName } else { [string]$script:ApplicablePolicyTypeIds[$id] }
+            if ($map.ContainsKey($name)) { $name = "$name ($id)" }
+            $map[$name] = $id
+            $seen[$id] = $true
+        }
+        foreach ($p in $policies) {
+            if (-not $p.type -or -not $p.type.id) { continue }
+            $id = ([string]$p.type.id).ToLower()
+            if ($seen.ContainsKey($id)) { continue }
+            $name = if ($p.type.displayName) { [string]$p.type.displayName } else { $id }
+            if ($map.ContainsKey($name)) { $name = "$name ($id)" }
+            $map[$name] = $id
+            $seen[$id] = $true
+        }
+        if ($map.Count -le 1) {
+            foreach ($id in $script:ApplicablePolicyTypeIds.Keys) {
+                $map[$script:ApplicablePolicyTypeIds[$id]] = $id
+            }
         }
         if ($map.Count -gt 1) {
             $script:PolicyTypeMap = $map
@@ -547,7 +618,7 @@ function Refresh-PolicyTypesFromServer {
                     }
                 }
             }
-            Write-Log "Loaded $($map.Count - 1) policy type(s) from project '$ProjectName'."
+            Write-Log "Policy types that can be applied in '$ProjectName': $($map.Count - 1)."
         }
     } catch {
         Write-Log "Could not load policy types from the server. Using the built-in list."
@@ -700,27 +771,13 @@ $ObjBoxPolicyType.Location = New-Object System.Drawing.Point(95, 28)
 $ObjBoxPolicyType.Size = New-Object System.Drawing.Size(520, 24)
 $ObjBoxPolicyType.DropDownWidth = 520
 $ObjBoxPolicyType.DropDownStyle = "DropDownList"
-$script:PolicyTypeMap = @{
-    "All"                            = ""
-    "Minimum number of reviewers"    = "fa4e907d-c16b-4a4c-9dfa-4906e5d171dd"
-    "Required reviewers"             = "fd2167ab-b0be-447a-8ec8-39368250530e"
-    "Comment requirements"           = "c6a1889d-b943-4856-b76f-9e46bb6b0df2"
-    "Work item linking"              = "40e92b44-2fe1-4dd6-b3d8-74a9c21d0c6e"
-    "Build validation"               = "0609b952-1397-4640-95ec-e00a01b2c241"
-    "Require a merge strategy"       = "fa4e907d-c16b-4a4c-9dfa-4916e5d171ab"
-    "Status checks"                  = "cbdc66da-9728-4af8-aada-9a5a32e4a226"
+$script:PolicyTypeMap = @{ "All" = "" }
+foreach ($id in $script:ApplicablePolicyTypeIds.Keys) {
+    $script:PolicyTypeMap[$script:ApplicablePolicyTypeIds[$id]] = $id
 }
 $script:PolicyTypesLoadedFromServer = $false
-@(
-    "All",
-    "Minimum number of reviewers",
-    "Required reviewers",
-    "Comment requirements",
-    "Work item linking",
-    "Build validation",
-    "Require a merge strategy",
-    "Status checks"
-) | ForEach-Object { [void]$ObjBoxPolicyType.Items.Add($_) }
+[void]$ObjBoxPolicyType.Items.Add("All")
+@($script:ApplicablePolicyTypeIds.Values | Sort-Object) | ForEach-Object { [void]$ObjBoxPolicyType.Items.Add($_) }
 $ObjBoxPolicyType.SelectedIndex = 0
 
 $GroupFilter.Controls.AddRange(@($LabelPolicyType, $ObjBoxPolicyType))
@@ -1144,11 +1201,11 @@ function Invoke-PolicyOperation {
                         $ref = if ($s.refName) { $s.refName } else { "all branches" }
                         if (Test-RealRepositoryId $s.repositoryId) {
                             $rid = ([string]$s.repositoryId).ToLower()
-                            $repo = if ($repoNames.ContainsKey($rid)) { $repoNames[$rid] } else { $s.repositoryId }
+                            $repo = if ($repoNames.ContainsKey($rid)) { $repoNames[$rid] } else { "one repository" }
+                            $scopeBits += "$ref, applies to $repo"
                         } else {
-                            $repo = "all repositories"
+                            $scopeBits += "$ref, applies to all repositories"
                         }
-                        $scopeBits += "$ref ($repo)"
                     }
                     $scopeText = if ($scopeBits.Count -gt 0) { $scopeBits -join "; " } else { "whole project" }
                     Write-Log "  $typeName | Policy #$($p.id) | $onText | $blockText | $scopeText"
